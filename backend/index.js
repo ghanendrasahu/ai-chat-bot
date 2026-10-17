@@ -1,4 +1,5 @@
 import "dotenv/config";
+import crypto from "node:crypto";
 import path from "path";
 import { existsSync } from "fs";
 import { fileURLToPath } from "url";
@@ -12,9 +13,69 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, "..", "frontend", "dist");
 const hasBuiltFrontend = existsSync(path.join(distDir, "index.html"));
 
+const ACCESS_TOKEN = (process.env.CHAT_ACCESS_TOKEN || "").trim();
+const MAX_MESSAGE_CHARS = 2000;
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX_PER_WINDOW = Number(process.env.CHAT_RATE_LIMIT || 15);
+const RATE_MAX_PER_DAY = Number(process.env.CHAT_DAILY_LIMIT || 400);
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.set("trust proxy", 1);
+// Same-origin is always allowed (the built SPA). Cross-origin is an explicit
+// opt-in list instead of the previous allow-all default.
+app.use(
+  cors({
+    origin(origin, callback) {
+      callback(null, !origin || ALLOWED_ORIGINS.includes(origin));
+    },
+  })
+);
+app.use(express.json({ limit: "16kb" }));
+
+// Small in-memory limiter: per-IP burst + daily cap so a public demo cannot
+// be used to drain the owner's LLM key.
+const hits = new Map();
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const entry = hits.get(ip) ?? {
+    windowStart: now,
+    windowCount: 0,
+    dayStart: now,
+    dayCount: 0,
+  };
+  if (now - entry.windowStart > RATE_WINDOW_MS) {
+    entry.windowStart = now;
+    entry.windowCount = 0;
+  }
+  if (now - entry.dayStart > 86_400_000) {
+    entry.dayStart = now;
+    entry.dayCount = 0;
+  }
+  entry.windowCount += 1;
+  entry.dayCount += 1;
+  hits.set(ip, entry);
+
+  if (hits.size > 5000) {
+    for (const [key, value] of hits) {
+      if (now - value.dayStart > 86_400_000) hits.delete(key);
+    }
+  }
+  return entry.windowCount > RATE_MAX_PER_WINDOW || entry.dayCount > RATE_MAX_PER_DAY;
+}
+
+function isAuthorized(req) {
+  if (!ACCESS_TOKEN) return true;
+  const provided = (req.get("x-access-token") || "").trim();
+  return (
+    provided.length === ACCESS_TOKEN.length &&
+    crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(ACCESS_TOKEN))
+  );
+}
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
@@ -32,6 +93,8 @@ function getClient() {
     client = new OpenAI({
       apiKey,
       baseURL: groqKey ? "https://api.groq.com/openai/v1" : undefined,
+      timeout: 30_000,
+      maxRetries: 1,
     });
   }
   return client;
@@ -43,15 +106,35 @@ function getModel() {
 }
 
 app.post("/chat", async (req, res) => {
+  if (!isAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  if (isRateLimited(ip)) {
+    return res
+      .status(429)
+      .json({ error: "Too many messages. Please wait a moment." });
+  }
+
+  const message =
+    typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    return res.status(400).json({ error: "Message is required" });
+  }
+  if (message.length > MAX_MESSAGE_CHARS) {
+    return res.status(400).json({
+      error: `Message is too long (limit ${MAX_MESSAGE_CHARS} characters)`,
+    });
+  }
+
   const api = getClient();
   if (!api) {
     return res
       .status(503)
       .json({ error: "No LLM key is configured on the server" });
   }
-  try {
-    const { message } = req.body;
 
+  try {
     const response = await api.chat.completions.create({
       model: getModel(),
       messages: [
@@ -60,15 +143,15 @@ app.post("/chat", async (req, res) => {
       ],
     });
 
-    const reply = response.choices[0].message.content;
+    const reply = response.choices[0]?.message?.content;
+    if (!reply) throw new Error("empty completion");
     res.json({ reply });
   } catch (err) {
-    console.error(err);
-    const detail =
-      err && typeof err.message === "string" && err.message.length < 200
-        ? err.message
-        : "The AI provider rejected the request";
-    res.status(502).json({ error: detail });
+    // Log the provider detail, never return it to the browser.
+    console.error("chat completion failed:", err);
+    res
+      .status(502)
+      .json({ error: "The AI service is unavailable right now. Please try again." });
   }
 });
 
@@ -84,6 +167,14 @@ if (hasBuiltFrontend) {
 }
 
 const port = process.env.PORT || 3001;
-app.listen(port, "0.0.0.0", () =>
-  console.log(`✅ Backend running on http://localhost:${port}`)
-);
+const isMain =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  app.listen(port, "0.0.0.0", () =>
+    console.log(`✅ Backend running on http://localhost:${port}`)
+  );
+}
+
+export default app;

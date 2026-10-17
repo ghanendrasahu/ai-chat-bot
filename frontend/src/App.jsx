@@ -5,6 +5,7 @@ const API_BASE =
   import.meta.env.VITE_API_URL !== undefined
     ? import.meta.env.VITE_API_URL
     : "http://localhost:3001";
+const ACCESS_TOKEN = import.meta.env.VITE_CHAT_TOKEN || "";
 
 const SUGGESTIONS = [
   {
@@ -32,6 +33,9 @@ function friendlyError(error) {
   const message = error instanceof Error ? error.message : "";
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return "I couldn't reach the server. Check your connection and try again.";
+  }
+  if (/abort|timeout|timed out/i.test(message)) {
+    return "The reply took too long. Please try again.";
   }
   if (/503|no llm key/i.test(message)) {
     return "Mira isn't available right now. Please try again later.";
@@ -200,11 +204,17 @@ export default function App() {
 
   const requestReply = async (text) => {
     setLoading(true);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
     try {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {}),
+        },
         body: JSON.stringify({ message: text }),
+        signal: controller.signal,
       });
 
       const data = await res.json().catch(() => ({}));
@@ -228,6 +238,7 @@ export default function App() {
         },
       ]);
     } finally {
+      clearTimeout(timer);
       setLoading(false);
       inputRef.current?.focus();
     }
