@@ -32,6 +32,28 @@ npm run dev
 
 The frontend runs on `http://localhost:5173` and proxies API requests to the backend.
 
+## Configuration
+
+Backend variables (copy `backend/.env.example` to `backend/.env`):
+
+| Variable | Default | Description |
+|---------|---------|-------------|
+| `GROQ_API_KEY` / `OPENAI_API_KEY` | *(empty)* | Server-side LLM key; Groq wins when both are set |
+| `AI_MODEL` | provider default | Override the model name |
+| `CHAT_ACCESS_TOKEN` | *(empty)* | Require `X-Access-Token` on `POST /chat` |
+| `CHAT_RATE_LIMIT` | `15` | Requests per IP per minute |
+| `CHAT_DAILY_LIMIT` | `400` | Requests per IP per day |
+| `CORS_ORIGIN` | `http://localhost:5173` | Comma-separated browser origins |
+
+When the backend sets `CHAT_ACCESS_TOKEN`, the frontend must be built with the same value in `VITE_CHAT_TOKEN`. Vite embeds that value in the browser bundle, so treat it as abuse friction rather than a server secret; the per-IP limits are the primary control. Provider errors are logged server-side and never returned to clients.
+
+## Tests
+
+```bash
+cd backend
+npm test
+```
+
 ## Scripts
 
 | Command | Description |
