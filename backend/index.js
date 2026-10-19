@@ -24,7 +24,17 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .filter(Boolean);
 
 const app = express();
+app.disable("x-powered-by");
 app.set("trust proxy", 1);
+// Baseline security headers; the SPA is same-origin so framing stays denied.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  next();
+});
 // Same-origin is always allowed (the built SPA). Cross-origin is an explicit
 // opt-in list instead of the previous allow-all default.
 app.use(
