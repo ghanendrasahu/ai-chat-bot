@@ -1,0 +1,17 @@
+# Single-service blueprint: builds the React frontend, serves it from the
+# Express backend. Requires OPENAI_API_KEY to be set in the Render dashboard
+# (leave sync:false so the value is never committed).
+services:
+  - type: web
+    name: ai-chat-bot
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: "cd frontend && npm ci && npm run build && cd ../backend && npm ci"
+    startCommand: "cd backend && node index.js"
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: NODE_VERSION
+        value: "20"

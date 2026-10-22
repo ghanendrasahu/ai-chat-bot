@@ -95,7 +95,7 @@ button {
 }
 .chat-box {
   position: relative;
-  background: url('./chat-bg.jpg') no-repeat center center;
+  background: url('/image.jpg') no-repeat center center;
   background-size: cover;
 }
 

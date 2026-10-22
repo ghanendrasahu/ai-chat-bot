@@ -6,6 +6,14 @@ export default function App() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // VITE_API_URL overrides the chat API origin at build time.
+  // It ships empty for the single-service deployment (same-origin "/chat")
+  // and stays undefined for local dev, where the backend runs on :3001.
+  const apiBase =
+    import.meta.env.VITE_API_URL !== undefined
+      ? import.meta.env.VITE_API_URL
+      : "http://localhost:3001";
+
   const sendMessage = async () => {
     if (!input.trim()) return;
 
@@ -15,7 +23,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      const res = await fetch("http://localhost:3001/chat", {
+      const res = await fetch(`${apiBase}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: input }),
