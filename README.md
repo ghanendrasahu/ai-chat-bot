@@ -2,6 +2,10 @@
 
 A fullstack AI chat bot with a Node.js/Express backend and React (Vite) frontend, powered by the OpenAI API.
 
+> **Live demo:** https://ai-chat-bot-tmov.onrender.com
+>
+> Free-tier hosting: the first load after idle can take 30-60 seconds.
+
 ## Tech Stack
 
 - **Backend:** Node.js, Express, OpenAI SDK, CORS, dotenv
