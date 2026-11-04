@@ -29,14 +29,18 @@ export default function App() {
         body: JSON.stringify({ message: input }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.reply) {
+        throw new Error(data.error || `The server returned ${res.status}`);
+      }
       const miraMsg = { sender: "Mira", text: data.reply };
       setMessages(prev => [...prev, miraMsg]);
     } catch (err) {
       console.error(err);
+      const detail = err && err.message ? err.message : "Something went wrong.";
       setMessages(prev => [
         ...prev,
-        { sender: "Mira", text: "Oops! Something went wrong. 😅" },
+        { sender: "Mira", text: `Sorry - I couldn't reply. ${detail}` },
       ]);
     } finally {
       setLoading(false);

@@ -20,13 +20,26 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// initialize OpenAI client lazily so a missing key doesn't crash the
-// process at boot; the endpoint reports the config error instead.
+// Prefer Groq's free OpenAI-compatible endpoint when configured; fall back
+// to OpenAI. The client is created lazily so a missing key doesn't crash the
+// process at boot - the endpoint reports the config error instead.
 let client = null;
 function getClient() {
-  if (!process.env.OPENAI_API_KEY) return null;
-  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const groqKey = process.env.GROQ_API_KEY;
+  const apiKey = groqKey || process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  if (!client) {
+    client = new OpenAI({
+      apiKey,
+      baseURL: groqKey ? "https://api.groq.com/openai/v1" : undefined,
+    });
+  }
   return client;
+}
+
+function getModel() {
+  if (process.env.AI_MODEL) return process.env.AI_MODEL;
+  return process.env.GROQ_API_KEY ? "openai/gpt-oss-20b" : "gpt-4o-mini";
 }
 
 app.post("/chat", async (req, res) => {
@@ -34,14 +47,13 @@ app.post("/chat", async (req, res) => {
   if (!api) {
     return res
       .status(503)
-      .json({ error: "OPENAI_API_KEY is not configured on the server" });
+      .json({ error: "No LLM key is configured on the server" });
   }
   try {
     const { message } = req.body;
 
-    // send user message to GPT
-    const response = await getClient().chat.completions.create({
-      model: "gpt-4o-mini",
+    const response = await api.chat.completions.create({
+      model: getModel(),
       messages: [
         { role: "system", content: "You are Mira, a friendly AI girl who chats warmly." },
         { role: "user", content: message },
@@ -52,7 +64,11 @@ app.post("/chat", async (req, res) => {
     res.json({ reply });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Something went wrong" });
+    const detail =
+      err && typeof err.message === "string" && err.message.length < 200
+        ? err.message
+        : "The AI provider rejected the request";
+    res.status(502).json({ error: detail });
   }
 });
 
