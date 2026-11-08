@@ -41,19 +41,14 @@
 }
 
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   flex: 0 0 auto;
   width: 40px;
   height: 40px;
   border-radius: 11px;
-  background: linear-gradient(145deg, #a7aeff, #8b93ff 55%, #5c66e8);
-  color: #0b0d12;
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
+  object-fit: cover;
   box-shadow: 0 10px 24px -14px rgba(139, 147, 255, 0.95);
+  background: linear-gradient(145deg, #a7aeff, #8b93ff 55%, #5c66e8);
 }
 
 .brand h1 {

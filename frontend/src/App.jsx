@@ -272,9 +272,11 @@ export default function App() {
       <div className="shell">
         <header className="app-header">
           <div className="brand">
-            <span className="brand-mark" aria-hidden="true">
-              M
-            </span>
+            <img
+              className="brand-mark"
+              src="/icon.png"
+              alt="Mira logo"
+            />
             <div>
               <h1>Mira</h1>
               <p>AI chat companion</p>
