@@ -1,6 +1,11 @@
 # Single-service blueprint: builds the React frontend, serves it from the
-# Express backend. Requires OPENAI_API_KEY to be set in the Render dashboard
-# (leave sync:false so the value is never committed).
+# Express backend.
+#
+# Set exactly one LLM key in the Render dashboard (both use sync:false so the
+# value is never committed):
+#   GROQ_API_KEY    - free tier, no card needed, runs openai/gpt-oss-20b
+#   OPENAI_API_KEY  - paid, runs gpt-4o-mini by default
+# If both are set, Groq wins.
 services:
   - type: web
     name: ai-chat-bot
@@ -11,6 +16,8 @@ services:
     startCommand: "cd backend && node index.js"
     healthCheckPath: /health
     envVars:
+      - key: GROQ_API_KEY
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: NODE_VERSION

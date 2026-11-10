@@ -4,3 +4,6 @@ build/
 .env
 .env.*
 !.env.example
+# The production frontend build needs an empty VITE_API_URL to talk to the
+# backend on the same origin. It holds no secrets.
+!frontend/.env.production

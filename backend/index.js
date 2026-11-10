@@ -15,6 +15,10 @@ const hasBuiltFrontend = existsSync(path.join(distDir, "index.html"));
 
 const ACCESS_TOKEN = (process.env.CHAT_ACCESS_TOKEN || "").trim();
 const MAX_MESSAGE_CHARS = 2000;
+const MAX_HISTORY_MESSAGES = 12;
+const MAX_HISTORY_CHARS = 8000;
+const SYSTEM_PROMPT =
+  "You are Mira, a friendly AI girl who chats warmly. Keep replies short and useful.";
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_PER_WINDOW = Number(process.env.CHAT_RATE_LIMIT || 15);
 const RATE_MAX_PER_DAY = Number(process.env.CHAT_DAILY_LIMIT || 400);
@@ -88,7 +92,15 @@ function isAuthorized(req) {
 }
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
+  const groqKey = process.env.GROQ_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  const hasKey = Boolean(groqKey || openaiKey);
+  res.json({
+    status: "ok",
+    ready: hasKey,
+    provider: groqKey ? "groq" : openaiKey ? "openai" : null,
+    model: hasKey ? getModel() : null,
+  });
 });
 
 // Prefer Groq's free OpenAI-compatible endpoint when configured; fall back
@@ -113,6 +125,41 @@ function getClient() {
 function getModel() {
   if (process.env.AI_MODEL) return process.env.AI_MODEL;
   return process.env.GROQ_API_KEY ? "openai/gpt-oss-20b" : "gpt-4o-mini";
+}
+
+/**
+ * Keeps the recent turns of the conversation so Mira can answer with the
+ * thread in mind. Only known roles and plain text survive, and the total
+ * size is capped so a long thread cannot blow up the request.
+ */
+function sanitizeHistory(input) {
+  if (!Array.isArray(input)) return [];
+  const clean = [];
+  let budget = MAX_HISTORY_CHARS;
+
+  for (let i = input.length - 1; i >= 0; i -= 1) {
+    if (clean.length >= MAX_HISTORY_MESSAGES) break;
+    const item = input[i];
+    if (!item || typeof item !== "object") continue;
+
+    const role =
+      item.role === "user"
+        ? "user"
+        : item.role === "assistant"
+          ? "assistant"
+          : null;
+    if (!role) continue;
+
+    const content = typeof item.content === "string" ? item.content.trim() : "";
+    if (!content) continue;
+
+    const clipped = content.slice(0, MAX_MESSAGE_CHARS);
+    if (budget - clipped.length < 0) break;
+    budget -= clipped.length;
+    clean.unshift({ role, content: clipped });
+  }
+
+  return clean;
 }
 
 app.post("/chat", async (req, res) => {
@@ -144,11 +191,14 @@ app.post("/chat", async (req, res) => {
       .json({ error: "No LLM key is configured on the server" });
   }
 
+  const history = sanitizeHistory(req.body?.history);
+
   try {
     const response = await api.chat.completions.create({
       model: getModel(),
       messages: [
-        { role: "system", content: "You are Mira, a friendly AI girl who chats warmly." },
+        { role: "system", content: SYSTEM_PROMPT },
+        ...history,
         { role: "user", content: message },
       ],
     });
@@ -187,4 +237,5 @@ if (isMain) {
   );
 }
 
+export { app, sanitizeHistory };
 export default app;
