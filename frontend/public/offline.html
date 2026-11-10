@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#080a0e" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Mira - offline</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 24px;
+        text-align: center;
+        background: #080a0e;
+        color: #e9edf4;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      img {
+        width: 72px;
+        height: 72px;
+        border-radius: 16px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 650;
+      }
+      p {
+        margin: 0;
+        max-width: 42ch;
+        line-height: 1.6;
+        color: #98a3b4;
+        font-size: 15px;
+      }
+      a {
+        margin-top: 8px;
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 22px;
+        border-radius: 999px;
+        background: #6fd9d3;
+        color: #032220;
+        font-weight: 700;
+        text-decoration: none;
+      }
+      a:focus-visible {
+        outline: 2px solid #6fd9d3;
+        outline-offset: 3px;
+      }
+      @media (prefers-color-scheme: light) {
+        body {
+          background: #e9edf2;
+          color: #171c26;
+        }
+        p {
+          color: #5b6472;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <img src="/mira-mark.jpg" alt="Mira logo" width="72" height="72" />
+    <h1>Mira is offline</h1>
+    <p>
+      You're not connected right now, so Mira can't answer. Check your
+      connection and try again - the conversation saved on this device is
+      waiting for you.
+    </p>
+    <a href="/">Reload Mira</a>
+  </body>
+</html>

@@ -60,7 +60,12 @@ export default function Composer({ onSend, onStop, pending }) {
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={handleKeyDown}
             autoComplete="off"
+            autoCapitalize="sentences"
+            autoCorrect="on"
+            enterKeyHint="send"
+            inputMode="text"
             spellCheck="true"
+            aria-label="Message Mira"
           />
         </div>
 

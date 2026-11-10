@@ -46,8 +46,11 @@ export default function Thread({ messages, pending, model, onPick, onRetry }) {
   }, []);
 
   // Follow new messages only while the reader is already at the bottom.
+  // On mount with an empty thread there is nothing to pin to the bottom,
+  // so don't yank the empty state out of view.
   useEffect(() => {
     if (!atBottomRef.current) return;
+    if (messages.length === 0 && !pending) return;
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;

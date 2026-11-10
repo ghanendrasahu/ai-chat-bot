@@ -119,3 +119,39 @@ export function ChevronDownIcon(props) {
     </Icon>
   );
 }
+
+export function MenuIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M4 7h16" />
+      <path d="M4 12h16" />
+      <path d="M4 17h16" />
+    </Icon>
+  );
+}
+
+export function PlusIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </Icon>
+  );
+}
+
+export function XIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </Icon>
+  );
+}
+
+export function ChatIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </Icon>
+  );
+}

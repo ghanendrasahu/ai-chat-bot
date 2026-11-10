@@ -1,10 +1,19 @@
 import StatusPill from "./StatusPill.jsx";
-import { TrashIcon } from "./Icons.jsx";
+import { MenuIcon, TrashIcon } from "./Icons.jsx";
 
-export default function Header({ health, canClear, onClear }) {
+export default function Header({ health, canClear, onClear, onToggleDrawer }) {
   return (
     <header className="header">
       <div className="header__brand">
+        <button
+          type="button"
+          className="icon-btn header__menu"
+          onClick={onToggleDrawer}
+          aria-label="Open conversations"
+          title="Conversations"
+        >
+          <MenuIcon size={20} />
+        </button>
         <img
           className="header__mark"
           src="/mira-mark.jpg"
@@ -32,7 +41,6 @@ export default function Header({ health, canClear, onClear }) {
             type="button"
             className="icon-btn"
             onClick={onClear}
-            disabled={!canClear}
             aria-label="Clear conversation"
             title="Clear conversation"
           >
