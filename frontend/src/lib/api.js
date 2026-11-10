@@ -6,8 +6,16 @@ const API_BASE =
 const ACCESS_TOKEN = import.meta.env.VITE_CHAT_TOKEN || "";
 
 // A health check must never hang: a request that never settles would leave
-// the status badge stuck on whatever it last showed.
+// the status badge stuck on whatever it last showed. AbortSignal.timeout is
+// not universal, so detect it and fall back.
 const HEALTH_TIMEOUT_MS = 20_000;
+
+function healthSignal() {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(HEALTH_TIMEOUT_MS);
+  }
+  return undefined;
+}
 
 export { API_BASE };
 
@@ -20,12 +28,12 @@ export class ChatError extends Error {
   }
 }
 
-export async function fetchHealth() {
-  const response = await fetch(`${API_BASE}/health`, {
+export async function fetchPing() {
+  const response = await fetch(`${API_BASE}/ping`, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+    signal: healthSignal(),
   });
-  if (!response.ok) throw new ChatError(response.status, "Health check failed");
+  if (!response.ok) throw new ChatError(response.status, "Ping failed");
   return response.json();
 }
 

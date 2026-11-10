@@ -1,19 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchHealth } from "../lib/api.js";
+import { fetchPing } from "../lib/api.js";
 
 const HEALTHY_INTERVAL_MS = 30_000;
 // A failed check is retried in seconds, not in a minute - one blip should
-// not leave the badge lying for a whole poll cycle.
+// not leave the badge wrong for a whole poll cycle.
 const RETRY_INTERVAL_MS = 4_000;
 
 /**
- * Tracks whether the backend is actually reachable and whether a model key is
- * configured, so the status badge can tell the truth instead of always
- * claiming "Ready".
+ * What the badge is allowed to claim, given what we actually know.
+ *
+ * A health probe that fails on its own is not enough to call the app
+ * "Offline" - ad blockers and proxies commonly block health endpoints, so
+ * the probe can be unreachable while the chat works perfectly. "Offline" is
+ * only shown when both the probe and a chat attempt have failed.
  */
+function deriveStatus({ probe, chat, ready }) {
+  if (chat === "ok") return "online";
+  if (probe === "ok") return ready ? "online" : "degraded";
+  if (chat === "failed" && probe === "failed") return "offline";
+  return "checking";
+}
+
 export function useHealth() {
   const [state, setState] = useState({
-    status: "checking",
+    probe: "checking",
+    chat: "unknown",
+    ready: null,
     provider: null,
     model: null,
   });
@@ -22,35 +34,36 @@ export function useHealth() {
   const refresh = useCallback(async () => {
     const id = ++requestIdRef.current;
     try {
-      const info = await fetchHealth();
-      // A newer check has already answered; let it decide.
+      const info = await fetchPing();
       if (id !== requestIdRef.current) return true;
-      setState({
-        status: info.ready ? "online" : "degraded",
+      setState((prev) => ({
+        ...prev,
+        probe: "ok",
+        ready: Boolean(info.ready),
         provider: info.provider ?? null,
         model: info.model ?? null,
-      });
+      }));
       return true;
-    } catch {
+    } catch (error) {
       if (id !== requestIdRef.current) return true;
-      setState((prev) => ({ ...prev, status: "offline" }));
+      console.warn("health probe failed:", error?.message ?? error);
+      setState((prev) => ({ ...prev, probe: "failed" }));
       return false;
     }
   }, []);
 
   /**
-   * A reply that came back proves the backend is reachable, whatever the
-   * last health probe said. A failed request asks for a fresh check.
+   * A reply that came back is the strongest evidence the app can chat, so
+   * it flips the badge to ready whatever the probe last said. A failure
+   * marks the chat as unreachable and re-checks the server.
    */
   const report = useCallback(
     (result) => {
-      if (result?.ok) {
-        setState((prev) =>
-          prev.status === "online" ? prev : { ...prev, status: "online" }
-        );
-        return;
-      }
-      void refresh();
+      setState((prev) => ({
+        ...prev,
+        chat: result?.ok ? "ok" : "failed",
+      }));
+      if (!result?.ok) void refresh();
     },
     [refresh]
   );
@@ -83,5 +96,11 @@ export function useHealth() {
     };
   }, [refresh]);
 
-  return { ...state, refresh, report };
+  return {
+    status: deriveStatus(state),
+    provider: state.provider,
+    model: state.model,
+    refresh,
+    report,
+  };
 }

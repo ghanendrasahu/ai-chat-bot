@@ -36,6 +36,15 @@ function post(base, body, headers = {}) {
   });
 }
 
+test("ping is a lightweight public probe", async () => {
+  await withApp({ OPENAI_API_KEY: "", GROQ_API_KEY: "" }, async (base) => {
+    const response = await fetch(`${base}/ping`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal((await response.json()).status, "ok");
+  });
+});
+
 test("health probe is public", async () => {
   await withApp({ OPENAI_API_KEY: "", GROQ_API_KEY: "" }, async (base) => {
     const response = await fetch(`${base}/health`);

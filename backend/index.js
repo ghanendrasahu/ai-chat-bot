@@ -173,7 +173,7 @@ function isAuthorized(req) {
   );
 }
 
-app.get("/health", (req, res) => {
+const healthHandler = (req, res) => {
   // A cached health answer could tell the platform the app is ready when it
   // is not, so this one is never stored.
   res.setHeader("Cache-Control", "no-store");
@@ -186,7 +186,12 @@ app.get("/health", (req, res) => {
     provider: groqKey ? "groq" : openaiKey ? "openai" : null,
     model: hasKey ? getModel() : null,
   });
-});
+};
+
+// /health is the classic health endpoint, and it is on every ad blocker's
+// list - so the browser's probe lives on /ping, where nothing filters.
+app.get("/health", healthHandler);
+app.get("/ping", healthHandler);
 
 // Prefer Groq's free OpenAI-compatible endpoint when configured; fall back
 // to OpenAI. The client is created lazily so a missing key doesn't crash the
