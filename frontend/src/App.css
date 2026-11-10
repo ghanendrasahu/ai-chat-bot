@@ -786,6 +786,13 @@
   gap: var(--sp-3);
 }
 
+.composer__meta {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+
 .composer__hint {
   margin: 0;
   color: var(--muted-dim);
@@ -811,6 +818,13 @@
 
 .composer__count--near {
   color: var(--warning);
+}
+
+.composer__build {
+  color: var(--muted-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
 }
 
 /* ============================ scroll to bottom ============================ */

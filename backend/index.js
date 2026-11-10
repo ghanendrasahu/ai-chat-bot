@@ -321,7 +321,25 @@ app.post("/chat", async (req, res) => {
 
 // Serve the built React frontend when present (single-service deployment).
 if (hasBuiltFrontend) {
-  app.use(express.static(distDir));
+  const shell = path.join(distDir, "index.html");
+
+  // The shell is the pointer to the hashed assets, so a cached copy means
+  // running old code. It is tiny - never store it.
+  app.get("/", (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.sendFile(shell);
+  });
+
+  app.use(
+    express.static(distDir, {
+      setHeaders(res, filePath) {
+        // The file name carries the content hash, so it can be cached hard.
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    })
+  );
 }
 
 // Unknown routes answer in JSON for the API and with the SPA shell for
@@ -338,6 +356,7 @@ app.use((req, res) => {
     !path.extname(req.path) &&
     hasBuiltFrontend
   ) {
+    res.set("Cache-Control", "no-store");
     return res.sendFile(path.join(distDir, "index.html"));
   }
   res.status(404).json({ error: "Not found" });

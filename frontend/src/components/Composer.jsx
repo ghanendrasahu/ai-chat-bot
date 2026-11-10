@@ -92,14 +92,19 @@ export default function Composer({ onSend, onStop, pending }) {
           <kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line.
           Mira is an AI model, so check anything important.
         </p>
-        {showCount ? (
-          <span
-            className={`composer__count${remaining < 200 ? " composer__count--near" : ""}`}
-            aria-live="polite"
-          >
-            {counter.format(remaining)} left
+        <span className="composer__meta">
+          {showCount ? (
+            <span
+              className={`composer__count${remaining < 200 ? " composer__count--near" : ""}`}
+              aria-live="polite"
+            >
+              {counter.format(remaining)} left
+            </span>
+          ) : null}
+          <span className="composer__build" title="Which build this is">
+            build {__BUILD_ID__}
           </span>
-        ) : null}
+        </span>
       </div>
     </div>
   );
