@@ -91,12 +91,28 @@ Backend variables (copy `backend/.env.example` to `backend/.env`):
 | `CHAT_ACCESS_TOKEN` | *(empty)* | Require `X-Access-Token` on `POST /chat` |
 | `CHAT_RATE_LIMIT` | `15` | Requests per IP per minute |
 | `CHAT_DAILY_LIMIT` | `400` | Requests per IP per day |
+| `CHAT_GLOBAL_LIMIT` | `120` | Requests per minute for the whole service |
+| `CHAT_GLOBAL_DAILY_LIMIT` | `1500` | Requests per day for the whole service |
+| `TRUST_PROXY` | `1` | Proxy hops to trust when reading `X-Forwarded-For` |
 | `CORS_ORIGIN` | `http://localhost:5173` | Comma-separated browser origins |
 
 When the backend sets `CHAT_ACCESS_TOKEN`, the frontend must be built with the same value in
 `VITE_CHAT_TOKEN`. Vite embeds that value in the browser bundle, so treat it as abuse friction
 rather than a server secret; the per-IP limits are the primary control. Provider errors are logged
 server-side and never returned to clients.
+
+### How the abuse limits work
+
+The per-IP limits key on the client address, which is only as trustworthy as `TRUST_PROXY`. Behind
+one proxy (Render) `TRUST_PROXY=1` reads the address the proxy appended, and a client cannot forge
+it. Exposed directly, the header is client-controlled and the per-IP limit can be sidestepped - so
+`TRUST_PROXY=0` is the right setting there, and `CHAT_GLOBAL_LIMIT` /
+`CHAT_GLOBAL_DAILY_LIMIT` are the backstop either way: they are counted on the clock, not on
+anything the client controls, and they cap what a spoofing client can spend.
+
+A request from a browser origin that is not in `CORS_ORIGIN` is refused with `403` before it
+reaches the model. CORS alone would only stop the browser from *reading* the reply - the request
+would still run and still cost a call.
 
 Frontend variables are documented in [`frontend/README.md`](frontend/README.md).
 

@@ -24,6 +24,10 @@ export function describeError(error) {
       return "That message couldn’t be sent. Keep it under 2000 characters and try again.";
     case 401:
       return "This chat is locked — the server hasn’t been given an access token.";
+    case 403:
+      return "This chat can’t be reached from this address.";
+    case 413:
+      return "That message is too long to send. Shorten it and try again.";
     case 429:
       return "You’ve sent a lot of messages. Wait a minute, then try again.";
     case 502:
