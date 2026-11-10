@@ -10,8 +10,12 @@ import { useHealth } from "./hooks/useHealth.js";
 const UNDO_WINDOW_MS = 8000;
 
 export default function App() {
-  const { messages, pending, send, retry, clear, restore, stop } = useChat();
   const health = useHealth();
+  const { messages, pending, send, retry, clear, restore, stop } = useChat({
+    // A reply that arrives is proof the backend is up, whatever the last
+    // health probe said.
+    onResult: health.report,
+  });
   const [cleared, setCleared] = useState(null);
 
   const handleSend = useCallback((text) => send(text), [send]);

@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchHealth } from "../lib/api.js";
 
-const POLL_MS = 60_000;
+const HEALTHY_INTERVAL_MS = 30_000;
+// A failed check is retried in seconds, not in a minute - one blip should
+// not leave the badge lying for a whole poll cycle.
+const RETRY_INTERVAL_MS = 4_000;
 
 /**
  * Tracks whether the backend is actually reachable and whether a model key is
@@ -14,39 +17,71 @@ export function useHealth() {
     provider: null,
     model: null,
   });
-  const controllerRef = useRef(null);
+  const requestIdRef = useRef(0);
 
   const refresh = useCallback(async () => {
-    controllerRef.current?.abort();
-    const controller = new AbortController();
-    controllerRef.current = controller;
-
+    const id = ++requestIdRef.current;
     try {
-      const info = await fetchHealth(controller.signal);
-      if (controller.signal.aborted) return;
+      const info = await fetchHealth();
+      // A newer check has already answered; let it decide.
+      if (id !== requestIdRef.current) return true;
       setState({
         status: info.ready ? "online" : "degraded",
         provider: info.provider ?? null,
         model: info.model ?? null,
       });
-    } catch (error) {
-      if (error?.name === "AbortError") return;
+      return true;
+    } catch {
+      if (id !== requestIdRef.current) return true;
       setState((prev) => ({ ...prev, status: "offline" }));
+      return false;
     }
   }, []);
 
+  /**
+   * A reply that came back proves the backend is reachable, whatever the
+   * last health probe said. A failed request asks for a fresh check.
+   */
+  const report = useCallback(
+    (result) => {
+      if (result?.ok) {
+        setState((prev) =>
+          prev.status === "online" ? prev : { ...prev, status: "online" }
+        );
+        return;
+      }
+      void refresh();
+    },
+    [refresh]
+  );
+
   useEffect(() => {
-    void refresh();
-    const timer = setInterval(refresh, POLL_MS);
-    const onFocus = () => void refresh();
+    let timer = null;
+    let stopped = false;
+
+    // Checks are chained rather than set on an interval: a request that
+    // fails schedules the next one quickly, and one that succeeds waits.
+    const tick = async () => {
+      if (stopped) return;
+      const ok = await refresh();
+      if (stopped) return;
+      timer = setTimeout(tick, ok ? HEALTHY_INTERVAL_MS : RETRY_INTERVAL_MS);
+    };
+
+    void tick();
+
+    const onFocus = () => {
+      clearTimeout(timer);
+      void tick();
+    };
     window.addEventListener("focus", onFocus);
 
     return () => {
-      clearInterval(timer);
+      stopped = true;
+      clearTimeout(timer);
       window.removeEventListener("focus", onFocus);
-      controllerRef.current?.abort();
     };
   }, [refresh]);
 
-  return { ...state, refresh };
+  return { ...state, refresh, report };
 }

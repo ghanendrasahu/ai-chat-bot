@@ -26,7 +26,7 @@ function buildHistory(messages) {
     }));
 }
 
-export function useChat() {
+export function useChat({ onResult } = {}) {
   const [messages, setMessages] = useState(loadMessages);
   const [pending, setPending] = useState(false);
 
@@ -34,6 +34,11 @@ export function useChat() {
   const pendingRef = useRef(pending);
   const abortRef = useRef(null);
   const suppressAbortRef = useRef(false);
+  const onResultRef = useRef(onResult);
+
+  useEffect(() => {
+    onResultRef.current = onResult;
+  }, [onResult]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -60,6 +65,7 @@ export function useChat() {
         ...prev,
         { id: uid(), role: "mira", text: reply, at: Date.now(), status: "sent" },
       ]);
+      onResultRef.current?.({ ok: true });
     } catch (error) {
       if (error.name === "AbortError") {
         // The reader stopped it on purpose - say so instead of showing a fault.
@@ -88,6 +94,7 @@ export function useChat() {
           retry: text,
         },
       ]);
+      onResultRef.current?.({ ok: false, error });
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       setPending(false);
