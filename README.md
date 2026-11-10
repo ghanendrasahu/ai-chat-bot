@@ -110,9 +110,11 @@ it. Exposed directly, the header is client-controlled and the per-IP limit can b
 `CHAT_GLOBAL_DAILY_LIMIT` are the backstop either way: they are counted on the clock, not on
 anything the client controls, and they cap what a spoofing client can spend.
 
-A request from a browser origin that is not in `CORS_ORIGIN` is refused with `403` before it
-reaches the model. CORS alone would only stop the browser from *reading* the reply - the request
-would still run and still cost a call.
+A request to the API from a browser origin that is neither the app's own origin nor one in
+`CORS_ORIGIN` is refused with `403` before it reaches the model. CORS alone would only stop the
+browser from *reading* the reply - the request would still run and still cost a call. The app's own
+origin is always allowed, because browsers send an `Origin` header on every POST and on module
+script fetches; static files are never blocked by this check.
 
 Frontend variables are documented in [`frontend/README.md`](frontend/README.md).
 

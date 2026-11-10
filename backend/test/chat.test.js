@@ -166,6 +166,25 @@ test("allows an allowed origin through", async () => {
   });
 });
 
+test("allows the app's own origin through", async () => {
+  await withApp({ OPENAI_API_KEY: "", GROQ_API_KEY: "" }, async (base) => {
+    // A browser sends Origin on every POST, including same-origin ones.
+    const allowed = await post(base, { message: "hello" }, { Origin: base });
+    assert.equal(allowed.status, 503);
+  });
+});
+
+test("static files are not refused for carrying an Origin header", async () => {
+  await withApp({ OPENAI_API_KEY: "", GROQ_API_KEY: "" }, async (base) => {
+    // Browsers send Origin on module script fetches, so the assets the page
+    // needs must never be blocked by the origin check.
+    const response = await fetch(`${base}/favicon.png`, {
+      headers: { Origin: "https://elsewhere.example" },
+    });
+    assert.notEqual(response.status, 403);
+  });
+});
+
 test("a malformed body answers with JSON, not an HTML error page", async () => {
   await withApp({ OPENAI_API_KEY: "", GROQ_API_KEY: "" }, async (base) => {
     const response = await fetch(`${base}/chat`, {

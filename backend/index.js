@@ -58,6 +58,27 @@ app.use((_req, res, next) => {
   next();
 });
 
+/**
+ * A request may come from the app itself, from an explicitly allowed origin,
+ * or from something that is not a browser at all.
+ *
+ * The app's own origin has to be allowed: browsers send an Origin header on
+ * module script fetches and on every POST, so a check that only looked at
+ * CORS_ORIGIN would refuse the site's own requests.
+ */
+function originAllowed(req, origin) {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+
+  const proto = (req.get("x-forwarded-proto") || req.protocol)
+    .split(",")[0]
+    .trim();
+  const host = (req.get("x-forwarded-host") || req.get("host") || "")
+    .split(",")[0]
+    .trim();
+  return Boolean(host) && origin === `${proto}://${host}`;
+}
+
 // Same-origin is always allowed (the built SPA). Cross-origin is an explicit
 // opt-in list instead of the previous allow-all default.
 app.use(
@@ -68,16 +89,18 @@ app.use(
   })
 );
 // CORS only stops a browser from *reading* a cross-origin response - it does
-// not stop the request from reaching the handler. Refuse foreign origins
-// outright so a page on another site cannot spend the owner's LLM key.
-app.use((req, res, next) => {
-  const origin = req.get("origin");
-  if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+// not stop the request from reaching the handler. Refuse foreign origins on
+// the API so a page on another site cannot spend the owner's LLM key. Static
+// files cost nothing, so they are left alone.
+app.use(["/chat", "/api"], (req, res, next) => {
+  if (!originAllowed(req, req.get("origin"))) {
     return res.status(403).json({ error: "Origin not allowed" });
   }
   next();
 });
+
 app.use(express.json({ limit: MAX_BODY_SIZE }));
+
 
 // Small in-memory limiter: per-IP burst + daily cap so a public demo cannot
 // be used to drain the owner's LLM key.
