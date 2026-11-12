@@ -381,12 +381,15 @@ app.use((err, req, res, next) => {
 });
 
 const port = process.env.PORT || 3001;
+// Render (and any container host) needs 0.0.0.0. Local verification can set
+// HOST=127.0.0.1 so nothing is reachable from the network.
+const host = process.env.HOST || "0.0.0.0";
 const isMain =
   process.argv[1] &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMain) {
-  app.listen(port, "0.0.0.0", () =>
+  app.listen(port, host, () =>
     console.log(`✅ Backend running on http://localhost:${port}`)
   );
 }
