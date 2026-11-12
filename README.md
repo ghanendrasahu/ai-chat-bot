@@ -1,8 +1,8 @@
 # AI Chat Bot
 
 A fullstack AI chat bot with a Node.js/Express backend and a React (Vite) frontend. It talks to
-Groq or OpenAI through the same OpenAI-compatible endpoint, and serves the built frontend from the
-same process so the whole thing deploys as one web service.
+Groq, OpenAI or OpenRouter through the same OpenAI-compatible endpoint, and serves the built
+frontend from the same process so the whole thing deploys as one web service.
 
 > **Live demo:** https://ai-chat-bot-tmov.onrender.com
 >
@@ -15,16 +15,19 @@ same process so the whole thing deploys as one web service.
 
 ## The model: which provider, and is it free?
 
-The backend supports two providers and picks one at startup. **Groq wins when both keys are set.**
+The backend supports three OpenAI-compatible providers. **A key the visitor pastes in Settings wins
+over the server's key**, so the app works even when no key is configured on the server.
 
-| Provider | Model | Cost | Free tier |
+| Provider | Default model | Cost | Free tier |
 |---|---|---|---|
 | **Groq** (`GROQ_API_KEY`) | `openai/gpt-oss-20b` | **$0.00** | Yes, forever. No card. 30 requests/min, 1,000 requests/day, 200,000 tokens/day, 131k context. |
 | **OpenAI** (`OPENAI_API_KEY`) | `gpt-4o-mini` | $0.15 / 1M input tokens, $0.60 / 1M output tokens | No permanent free tier - new accounts get trial credits only. |
+| **OpenRouter** (`OPENROUTER_API_KEY`) | `openrouter/auto` | Depends on the routed model | Many models are free (`:free` suffix), with their own limits. |
 
-Both run against OpenAI's Chat Completions API shape, so switching is just a different key and base
-URL - no code change. `AI_MODEL` overrides the model name if you want something else (for example
-`gpt-5.4-nano` or `gpt-6-luna` on OpenAI, or `openai/gpt-oss-120b` on Groq).
+All three run against OpenAI's Chat Completions API shape, so switching is just a different key and
+base URL - no code change. The default provider is the first one with a server key, and `AI_MODEL`
+overrides that provider's model. Visitors can pick any provider and any model id from the header,
+model by model.
 
 **What the live demo uses right now:** `render.yaml` declares `OPENAI_API_KEY`, so the deployed
 instance is on OpenAI `gpt-4o-mini` and is metered. A typical message (about 50 input + 300 output
@@ -37,15 +40,25 @@ tokens) costs roughly **$0.00019**, so 1,000 messages is around 20 cents - but i
 
 ## Features
 
-- Streaming-free but fast replies, with **Markdown rendering** - headings, lists, bold/italic,
-  inline code, links, blockquotes and fenced code blocks with a copy button
-- **Conversation memory** - the last 10 turns are sent back to the model, so Mira actually follows
-  the thread
-- **Thread survives a refresh** - the conversation is kept in `localStorage`
+- **Bring your own key** - paste a Groq, OpenAI or OpenRouter key in Settings, under that provider.
+  Keys are kept in the browser's `localStorage` and sent per request in an `X-Provider-Key` header;
+  the server never stores or logs them.
+- **Model switching in the header** - pick a provider and a model id, or type any id the provider
+  offers. The conversation continues; each reply is labelled with the model that wrote it.
+- **One memory for every model** - add short facts ("I live in India and prefer TypeScript") once
+  and every provider reads them. The same list travels with each request and is assembled into the
+  system prompt server-side. Bookmark any message you sent to remember it.
+- **Persona and custom instructions** - Friendly, Concise, Technical or Creative, plus free-text
+  instructions such as "answer in bullet points", applied to every model.
+- Markdown rendering - headings, lists, bold/italic, inline code, links, blockquotes and fenced
+  code blocks with a copy button
+- **Regenerate** the last reply, copy any reply, retry a failed one
+- **Search across conversations** in the drawer, plus new/delete/undo
+- Theme control (System / Light / Dark) that follows the OS live
+- Thread survives a refresh - conversations are kept in `localStorage`
 - Textarea composer: <kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, a
   character counter warns near the 2,000-character limit, and a stop button cancels a slow reply
-- Copy any reply, retry a failed one, jump back to the latest message, undo a cleared conversation
-- An honest status badge - it polls `/health` and shows Ready, No model key or Offline
+- An honest status badge - it polls `/ping` and shows Ready, No model key or Offline
 - Per-IP rate limiting, a CORS allowlist, security headers, and provider errors that never reach
   the browser
 
@@ -74,11 +87,25 @@ The frontend runs on `http://localhost:5173` and calls the backend on `http://lo
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | `{ status, ready, provider, model }` - used by the status badge |
-| `POST` | `/chat` | `{ message, history? }` -> `{ reply }` |
+| `GET` | `/health`, `/ping` | `{ status, ready, provider, model, providers }` - used by the status badge |
+| `POST` | `/chat` | `{ message, history?, memory?, instructions?, persona? }` -> `{ reply, model, provider, keySource }` |
+
+Optional request headers on `POST /chat`:
+
+| Header | Meaning |
+|---|---|
+| `X-Provider` | `groq`, `openai` or `openrouter`. Defaults to the first provider with a server key. |
+| `X-Model` | Any model id the provider accepts. Defaults to that provider's default (or `AI_MODEL`). |
+| `X-Provider-Key` | The caller's own key. Used for this request only, never stored or logged. |
+| `X-Access-Token` | Required only when `CHAT_ACCESS_TOKEN` is set. |
 
 `history` is optional and takes up to 12 `{ role, content }` turns (`user` or `assistant` only).
 The server drops unknown roles, clips each turn to 2,000 characters and caps the total at 8,000.
+
+`memory` is an optional list of up to 40 short facts (300 characters each, 6,000 in total).
+`instructions` is at most 2,000 characters, and `persona` is one of `friendly`, `concise`,
+`technical`, `creative`. Everything is sanitized server-side and assembled into the system prompt,
+which is why the same memory works no matter which model answers.
 
 ## Configuration
 
@@ -86,8 +113,9 @@ Backend variables (copy `backend/.env.example` to `backend/.env`):
 
 | Variable | Default | Description |
 |---------|---------|-------------|
-| `GROQ_API_KEY` / `OPENAI_API_KEY` | *(empty)* | Server-side LLM key; Groq wins when both are set |
-| `AI_MODEL` | provider default | Override the model name |
+| `GROQ_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | *(empty)* | Server-side LLM keys. Optional: visitors can bring their own. |
+| `AI_MODEL` | provider default | Override the default provider's model name |
+| `HOST` | `0.0.0.0` | Interface to bind. Use `127.0.0.1` to keep a local run off the network. |
 | `CHAT_ACCESS_TOKEN` | *(empty)* | Require `X-Access-Token` on `POST /chat` |
 | `CHAT_RATE_LIMIT` | `15` | Requests per IP per minute |
 | `CHAT_DAILY_LIMIT` | `400` | Requests per IP per day |
@@ -122,7 +150,12 @@ Frontend variables are documented in [`frontend/README.md`](frontend/README.md).
 
 ```bash
 cd backend
-npm test
+npm test              # API, providers, memory, rate limits
+
+cd ../frontend
+npm run lint
+npm run build
+npm run test:mobile   # responsive checks in a real Chrome (needs Chrome installed)
 ```
 
 ## Scripts
