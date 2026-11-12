@@ -1,6 +1,19 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { ChatIcon, PlusIcon, TrashIcon, XIcon, CheckIcon } from "./Icons.jsx";
+import {
+  ChatIcon,
+  CheckIcon,
+  PlusIcon,
+  SearchIcon,
+  TrashIcon,
+  XIcon,
+} from "./Icons.jsx";
 import { formatChatTime } from "../lib/time.js";
+
+function matches(chat, query) {
+  const needle = query.toLowerCase();
+  if ((chat.title || "").toLowerCase().includes(needle)) return true;
+  return chat.messages.some((message) => message.text.toLowerCase().includes(needle));
+}
 
 /**
  * Slide-in history for conversations. On small screens it owns the screen; on
@@ -12,17 +25,21 @@ export default function Drawer({
   open,
   chats,
   activeId,
+  canClear,
   onNewChat,
   onClose,
   onSwitch,
   onDelete,
+  onClear,
 }) {
   const closeRef = useRef(null);
   const listId = useId();
   const [confirmId, setConfirmId] = useState(null);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (open) closeRef.current?.focus();
+    else setQuery("");
   }, [open]);
 
   // Cancel the pending delete after a few seconds or on Escape/close.
@@ -46,6 +63,9 @@ export default function Drawer({
   }, [open, onClose, confirmId]);
 
   if (!open) return null;
+
+  const searching = query.trim().length > 0;
+  const visible = searching ? chats.filter((chat) => matches(chat, query.trim())) : chats;
 
   return (
     <div className="drawer-root" role="presentation">
@@ -80,13 +100,51 @@ export default function Drawer({
           New conversation
         </button>
 
+        {chats.length > 0 ? (
+          <div className="drawer__search">
+            <SearchIcon size={15} className="drawer__searchIcon" />
+            <label className="sr-only" htmlFor={`${listId}-search`}>
+              Search conversations
+            </label>
+            <input
+              id={`${listId}-search`}
+              className="drawer__searchInput"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search messages"
+              autoComplete="off"
+              enterKeyHint="search"
+            />
+            {searching ? (
+              <button
+                type="button"
+                className="drawer__searchClear"
+                onClick={() => setQuery("")}
+                aria-label="Clear search"
+              >
+                <XIcon size={13} />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {canClear ? (
+          <button type="button" className="drawer__action" onClick={onClear}>
+            <TrashIcon size={15} />
+            Clear this conversation
+          </button>
+        ) : null}
+
         {chats.length === 0 ? (
           <p className="drawer__empty">
             No conversations yet. Start one and it will show up here.
           </p>
+        ) : visible.length === 0 ? (
+          <p className="drawer__empty">Nothing matches “{query.trim()}”.</p>
         ) : (
           <ul className="drawer__list" id={listId}>
-            {chats.map((chat) => {
+            {visible.map((chat) => {
               const isActive = chat.id === activeId;
               const count = chat.messages.length;
               return (

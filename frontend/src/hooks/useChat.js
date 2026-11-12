@@ -32,7 +32,7 @@ function buildHistory(messages) {
  * Owns every saved conversation. The active chat is what the UI renders;
  * `chats` is what the drawer lists. The store is written on every change.
  */
-export function useChat({ onResult } = {}) {
+export function useChat({ onResult, config } = {}) {
   const [state, setState] = useState(() => {
     const store = loadStore();
     if (!store) return { activeId: null, chats: [] };
@@ -45,6 +45,13 @@ export function useChat({ onResult } = {}) {
   const abortRef = useRef(null);
   const suppressAbortRef = useRef(false);
   const onResultRef = useRef(onResult);
+  // Provider/model/key/memory are read at send time, so changing the model
+  // mid-thread applies to the next message without restarting anything.
+  const configRef = useRef(config);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   useEffect(() => {
     onResultRef.current = onResult;
@@ -73,10 +80,11 @@ export function useChat({ onResult } = {}) {
     const targetId = chatId;
 
     try {
-      const reply = await sendChat({
+      const result = await sendChat({
         message: text,
         history,
         signal: controller.signal,
+        ...(configRef.current ?? {}),
       });
       setState((prev) => ({
         ...prev,
@@ -87,7 +95,16 @@ export function useChat({ onResult } = {}) {
                 at: Date.now(),
                 messages: [
                   ...c.messages,
-                  { id: uid(), role: "mira", text: reply, at: Date.now(), status: "sent" },
+                  {
+                    id: uid(),
+                    role: "mira",
+                    text: result.reply,
+                    // Recorded per reply, so a thread that switched models
+                    // still says which one wrote what.
+                    model: result.model,
+                    at: Date.now(),
+                    status: "sent",
+                  },
                 ],
               }
             : c
@@ -217,6 +234,36 @@ export function useChat({ onResult } = {}) {
     [request]
   );
 
+  /**
+   * Re-asks the last question, dropping the reply that is currently showing.
+   * Only valid when Mira's reply is the newest message, so it never deletes
+   * something the reader scrolled back to.
+   */
+  const regenerate = useCallback(() => {
+    if (pendingRef.current) return false;
+    const current = stateRef.current;
+    const chat = current.chats.find((c) => c.id === current.activeId);
+    if (!chat || chat.messages.length === 0) return false;
+
+    const last = chat.messages[chat.messages.length - 1];
+    if (last.role !== "mira") return false;
+
+    const userIndex = chat.messages.map((m) => m.role).lastIndexOf("user");
+    if (userIndex === -1) return false;
+
+    const history = buildHistory(chat.messages.slice(0, userIndex));
+    const question = chat.messages[userIndex].text;
+
+    setState((prev) => ({
+      ...prev,
+      chats: prev.chats.map((c) =>
+        c.id === chat.id ? { ...c, messages: c.messages.slice(0, -1) } : c
+      ),
+    }));
+    void request(question, history, chat.id);
+    return true;
+  }, [request]);
+
   const clear = useCallback(() => {
     suppressAbortRef.current = true;
     abortRef.current?.abort();
@@ -285,6 +332,7 @@ export function useChat({ onResult } = {}) {
     pending,
     send,
     retry,
+    regenerate,
     clear,
     restore,
     newChat,

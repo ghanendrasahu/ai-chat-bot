@@ -63,6 +63,10 @@ function sanitizeMessages(messages) {
       role: m.role,
       text: m.text,
       at: typeof m.at === "number" ? m.at : Date.now(),
+      // Which model wrote a reply, when it is known.
+      ...(typeof m.model === "string" && m.model
+        ? { model: m.model.slice(0, 120) }
+        : {}),
       status: "sent",
     }));
 }

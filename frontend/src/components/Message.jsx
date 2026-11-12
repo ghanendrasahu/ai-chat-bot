@@ -1,9 +1,16 @@
 import CopyButton from "./CopyButton.jsx";
 import Markdown from "./Markdown.jsx";
-import { AlertIcon, BotIcon, RefreshIcon } from "./Icons.jsx";
+import { AlertIcon, BookmarkIcon, BotIcon, RefreshIcon } from "./Icons.jsx";
 import { formatTime } from "../lib/time.js";
+import { shortModelName } from "../lib/providers.js";
 
-export default function Message({ message, onRetry }) {
+export default function Message({
+  message,
+  onRetry,
+  onRegenerate,
+  onSaveMemory,
+  isLast,
+}) {
   const isUser = message.role === "user";
   const isError = message.status === "error";
 
@@ -50,8 +57,40 @@ export default function Message({ message, onRetry }) {
 
         <div className="msg__meta">
           <span className="msg__time">{formatTime(message.at)}</span>
+
+          {isUser && onSaveMemory ? (
+            <button
+              type="button"
+              className="btn-copy btn-copy--icon"
+              onClick={() => onSaveMemory(message.text)}
+              aria-label="Save this message to memory"
+              title="Save to memory"
+            >
+              <BookmarkIcon size={13} />
+            </button>
+          ) : null}
+
           {isUser || isError ? null : (
-            <CopyButton text={message.text} label="Copy reply" />
+            <>
+              {message.model ? (
+                <span className="msg__model" title={`Written by ${message.model}`}>
+                  {shortModelName(message.model)}
+                </span>
+              ) : null}
+              <CopyButton text={message.text} label="Copy" />
+              {isLast && onRegenerate ? (
+                <button
+                  type="button"
+                  className="btn-copy"
+                  onClick={onRegenerate}
+                  aria-label="Regenerate this reply"
+                  title="Ask the model again"
+                >
+                  <RefreshIcon size={13} />
+                  <span>Regenerate</span>
+                </button>
+              ) : null}
+            </>
           )}
         </div>
       </div>

@@ -22,7 +22,17 @@ function TypingIndicator() {
   );
 }
 
-export default function Thread({ messages, pending, model, onPick, onRetry }) {
+export default function Thread({
+  messages,
+  pending,
+  model,
+  provider,
+  memoryCount,
+  onPick,
+  onRetry,
+  onRegenerate,
+  onSaveMemory,
+}) {
   const scrollRef = useRef(null);
   const atBottomRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
@@ -61,7 +71,14 @@ export default function Thread({ messages, pending, model, onPick, onRetry }) {
   return (
     <main className="main" ref={scrollRef} onScroll={handleScroll}>
       <div className="thread">
-        {isEmpty ? <EmptyState onPick={onPick} model={model} /> : null}
+        {isEmpty ? (
+          <EmptyState
+            onPick={onPick}
+            model={model}
+            provider={provider}
+            memoryCount={memoryCount}
+          />
+        ) : null}
 
         <div
           className="thread__log"
@@ -70,8 +87,15 @@ export default function Thread({ messages, pending, model, onPick, onRetry }) {
           aria-relevant="additions"
           aria-label="Conversation"
         >
-          {messages.map((message) => (
-            <Message key={message.id} message={message} onRetry={onRetry} />
+          {messages.map((message, index) => (
+            <Message
+              key={message.id}
+              message={message}
+              onRetry={onRetry}
+              onRegenerate={onRegenerate}
+              onSaveMemory={onSaveMemory}
+              isLast={index === messages.length - 1}
+            />
           ))}
           {pending ? <TypingIndicator /> : null}
         </div>

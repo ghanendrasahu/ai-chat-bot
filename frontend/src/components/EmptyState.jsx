@@ -1,4 +1,5 @@
 import { MessageIcon, SparkIcon } from "./Icons.jsx";
+import { providerLabel } from "../lib/settings.js";
 
 const SUGGESTIONS = [
   {
@@ -15,7 +16,7 @@ const SUGGESTIONS = [
   },
 ];
 
-export default function EmptyState({ onPick, model }) {
+export default function EmptyState({ onPick, model, provider, memoryCount = 0 }) {
   return (
     <div className="empty">
       <span className="empty__badge" aria-hidden="true">
@@ -24,7 +25,7 @@ export default function EmptyState({ onPick, model }) {
       <h2 className="empty__title">Start a conversation</h2>
       <p className="empty__text">
         Ask a question, think through a decision, or draft something together.
-        Mira remembers the thread while this tab stays open.
+        Your conversations stay on this device.
       </p>
 
       <ul className="empty__prompts">
@@ -44,7 +45,15 @@ export default function EmptyState({ onPick, model }) {
 
       {model ? (
         <p className="empty__model">
-          Mira is running <span translate="no">{model}</span>
+          Running <span translate="no">{model}</span>
+          {provider ? <> via {providerLabel(provider)}</> : null}
+          {memoryCount > 0 ? (
+            <>
+              {" · "}
+              {memoryCount} {memoryCount === 1 ? "memory" : "memories"} shared by
+              every model
+            </>
+          ) : null}
         </p>
       ) : null}
     </div>

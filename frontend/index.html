@@ -6,9 +6,30 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#080a0e" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#e9edf2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#080a0e" />
     <meta name="color-scheme" content="dark light" />
+    <!-- Resolves the theme before first paint, so "system" never flashes the
+         wrong colours while React boots. Kept in sync by useSettings. -->
+    <script>
+      (function () {
+        try {
+          var saved = JSON.parse(localStorage.getItem("mira.settings.v1") || "{}");
+          var theme =
+            saved.theme === "light" || saved.theme === "dark"
+              ? saved.theme
+              : window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          document.documentElement.dataset.theme = theme;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) {
+            meta.setAttribute("content", theme === "light" ? "#e9edf2" : "#080a0e");
+          }
+        } catch (error) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
     <meta
       name="description"
       content="Mira is a friendly AI chat companion for questions, planning and drafting."

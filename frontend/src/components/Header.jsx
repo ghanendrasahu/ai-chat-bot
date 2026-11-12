@@ -1,7 +1,24 @@
+import ModelChip from "./ModelChip.jsx";
+import ModelMenu from "./ModelMenu.jsx";
 import StatusPill from "./StatusPill.jsx";
-import { MenuIcon, TrashIcon } from "./Icons.jsx";
+import { MenuIcon, SettingsIcon, TrashIcon } from "./Icons.jsx";
 
-export default function Header({ health, canClear, onClear, onToggleDrawer }) {
+export default function Header({
+  status,
+  provider,
+  model,
+  settings,
+  serverProviders,
+  modelOpen,
+  onToggleModel,
+  onCloseModel,
+  onOpenSettings,
+  onSetProvider,
+  onSetModel,
+  canClear,
+  onClear,
+  onToggleDrawer,
+}) {
   return (
     <header className="header">
       <div className="header__brand">
@@ -31,15 +48,17 @@ export default function Header({ health, canClear, onClear, onToggleDrawer }) {
       </div>
 
       <div className="header__actions">
-        <StatusPill
-          status={health.status}
-          provider={health.provider}
-          model={health.model}
+        <StatusPill status={status} provider={provider} model={model} />
+        <ModelChip
+          model={settings.model}
+          open={modelOpen}
+          onClick={onToggleModel}
+          controls="model-menu"
         />
         {canClear ? (
           <button
             type="button"
-            className="icon-btn"
+            className="icon-btn header__clear"
             onClick={onClear}
             aria-label="Clear conversation"
             title="Clear conversation"
@@ -47,7 +66,28 @@ export default function Header({ health, canClear, onClear, onToggleDrawer }) {
             <TrashIcon size={16} />
           </button>
         ) : null}
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={onOpenSettings}
+          aria-label="Settings"
+          title="Settings"
+        >
+          <SettingsIcon size={18} />
+        </button>
       </div>
+
+      <ModelMenu
+        open={modelOpen}
+        onClose={onCloseModel}
+        provider={settings.provider}
+        model={settings.model}
+        keys={settings.keys}
+        serverProviders={serverProviders}
+        onProvider={onSetProvider}
+        onModel={onSetModel}
+        onOpenSettings={onOpenSettings}
+      />
     </header>
   );
 }
