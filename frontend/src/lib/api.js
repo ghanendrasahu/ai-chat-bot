@@ -21,10 +21,11 @@ export { API_BASE };
 
 /** An error that carries the HTTP status, so the UI can react to it. */
 export class ChatError extends Error {
-  constructor(status, detail) {
+  constructor(status, detail, code) {
     super(detail || `Request failed with status ${status}`);
     this.name = "ChatError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -37,23 +38,47 @@ export async function fetchPing() {
   return response.json();
 }
 
-export async function sendChat({ message, history = [], signal }) {
+/**
+ * Sends one turn.
+ *
+ * Provider, model and the user's own key travel as headers so the key never
+ * lands in a request log that records bodies. Memory and instructions are
+ * plain content and go in the body.
+ */
+export async function sendChat({
+  message,
+  history = [],
+  memory = [],
+  instructions = "",
+  persona = "friendly",
+  provider,
+  model,
+  apiKey,
+  signal,
+}) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {}),
+      ...(provider ? { "X-Provider": provider } : {}),
+      ...(model ? { "X-Model": model } : {}),
+      ...(apiKey ? { "X-Provider-Key": apiKey } : {}),
     },
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ message, history, memory, instructions, persona }),
     signal,
   });
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new ChatError(response.status, data.error);
+    throw new ChatError(response.status, data.error, data.code);
   }
   if (typeof data.reply !== "string" || !data.reply.trim()) {
     throw new ChatError(502, "The model returned an empty reply.");
   }
-  return data.reply;
+  return {
+    reply: data.reply,
+    model: typeof data.model === "string" ? data.model : model ?? null,
+    provider: typeof data.provider === "string" ? data.provider : provider ?? null,
+  };
 }

@@ -83,37 +83,38 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* ---- light ramp: follows the system setting ---- */
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
+/* ---- light ramp ----
+   `data-theme` is always set to the resolved theme by an inline script before
+   first paint (and kept in sync by useSettings), so "system" needs no media
+   query here. */
+:root[data-theme="light"] {
+  color-scheme: light;
 
-    --bg: #e9edf2;
-    --surface: #ffffff;
-    --surface-2: #f1f4f8;
-    --surface-3: #e6eaf1;
-    --border: #dde3eb;
-    --border-strong: #c3ccd9;
+  --bg: #e9edf2;
+  --surface: #ffffff;
+  --surface-2: #f1f4f8;
+  --surface-3: #e6eaf1;
+  --border: #dde3eb;
+  --border-strong: #c3ccd9;
 
-    --text: #171c26;
-    --text-soft: #3c4453;
-    --muted: #5b6472;
-    --muted-dim: #6b7482;
+  --text: #171c26;
+  --text-soft: #3c4453;
+  --muted: #5b6472;
+  --muted-dim: #6b7482;
 
-    --accent: #0b7a74;
-    --accent-strong: #0b6a65;
-    --accent-ink: #ffffff;
-    --accent-soft: rgba(11, 122, 116, 0.08);
-    --accent-line: rgba(11, 122, 116, 0.35);
+  --accent: #0b7a74;
+  --accent-strong: #0b6a65;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(11, 122, 116, 0.08);
+  --accent-line: rgba(11, 122, 116, 0.35);
 
-    --success: #146c3a;
-    --warning: #8a5a00;
-    --danger: #b3261e;
-    --danger-soft: rgba(179, 38, 30, 0.08);
-    --code-bg: #eef1f6;
+  --success: #146c3a;
+  --warning: #8a5a00;
+  --danger: #b3261e;
+  --danger-soft: rgba(179, 38, 30, 0.08);
+  --code-bg: #eef1f6;
 
-    --shadow-soft: 0 20px 48px -32px rgba(23, 28, 38, 0.35);
-  }
+  --shadow-soft: 0 20px 48px -32px rgba(23, 28, 38, 0.35);
 }
 
 * {

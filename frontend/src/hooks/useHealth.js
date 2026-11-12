@@ -21,6 +21,8 @@ function deriveStatus({ probe, chat, ready }) {
   return "checking";
 }
 
+export { deriveStatus };
+
 export function useHealth() {
   const [state, setState] = useState({
     probe: "checking",
@@ -28,6 +30,7 @@ export function useHealth() {
     ready: null,
     provider: null,
     model: null,
+    providers: null,
   });
   const requestIdRef = useRef(0);
 
@@ -42,6 +45,7 @@ export function useHealth() {
         ready: Boolean(info.ready),
         provider: info.provider ?? null,
         model: info.model ?? null,
+        providers: info.providers ?? null,
       }));
       return true;
     } catch (error) {
@@ -98,6 +102,12 @@ export function useHealth() {
 
   return {
     status: deriveStatus(state),
+    // Raw signals, so the UI can factor in a user-supplied key before
+    // deciding whether the model is ready.
+    probe: state.probe,
+    chat: state.chat,
+    ready: state.ready,
+    providers: state.providers,
     provider: state.provider,
     model: state.model,
     refresh,

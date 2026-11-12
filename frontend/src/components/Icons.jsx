@@ -155,3 +155,110 @@ export function ChatIcon(props) {
     </Icon>
   );
 }
+
+export function SettingsIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M4 6h9" />
+      <path d="M17 6h3" />
+      <path d="M4 12h3" />
+      <path d="M11 12h9" />
+      <path d="M4 18h9" />
+      <path d="M17 18h3" />
+      <circle cx="15" cy="6" r="2" />
+      <circle cx="9" cy="12" r="2" />
+      <circle cx="15" cy="18" r="2" />
+    </Icon>
+  );
+}
+
+export function KeyIcon(props) {
+  return (
+    <Icon {...props}>
+      <circle cx="7.5" cy="15.5" r="3.5" />
+      <path d="m10.5 12.5 7-7" />
+      <path d="m15 8 2 2" />
+      <path d="m18 5 2 2" />
+    </Icon>
+  );
+}
+
+export function SearchIcon(props) {
+  return (
+    <Icon {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m16.5 16.5 3.5 3.5" />
+    </Icon>
+  );
+}
+
+export function EyeIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </Icon>
+  );
+}
+
+export function EyeOffIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M10.6 6.2A9.6 9.6 0 0 1 12 6c6.4 0 10 7 10 7a17 17 0 0 1-3.2 3.9" />
+      <path d="M6.1 6.7C3.6 8.4 2 12 2 12s3.6 7 10 7a9.7 9.7 0 0 0 4.3-1" />
+      <path d="m2 2 20 20" />
+    </Icon>
+  );
+}
+
+export function ExternalLinkIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M14 4h6v6" />
+      <path d="M20 4 10 14" />
+      <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
+    </Icon>
+  );
+}
+
+export function BookmarkIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V21l-6-4-6 4Z" />
+    </Icon>
+  );
+}
+
+export function SunIcon(props) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.9 4.9 1.4 1.4" />
+      <path d="m17.7 17.7 1.4 1.4" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m4.9 19.1 1.4-1.4" />
+      <path d="m17.7 6.3 1.4-1.4" />
+    </Icon>
+  );
+}
+
+export function MoonIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+    </Icon>
+  );
+}
+
+export function MonitorIcon(props) {
+  return (
+    <Icon {...props}>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8" />
+      <path d="M12 16v4" />
+    </Icon>
+  );
+}

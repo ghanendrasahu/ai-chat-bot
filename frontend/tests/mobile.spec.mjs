@@ -56,9 +56,28 @@ run(npmCmd, ["run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"], "vite
 run("node", ["tests/mock-backend.mjs"], "mock backend");
 
 let failed = 0;
-function check(label, condition) {
-  console.log(`${condition ? "PASS" : "FAIL"}  ${label}`);
+function check(label, condition, detail) {
+  const suffix = !condition && detail ? ` -> ${JSON.stringify(detail)}` : "";
+  console.log(`${condition ? "PASS" : "FAIL"}  ${label}${suffix}`);
   if (!condition) failed += 1;
+}
+
+/** Controls inside one container that are smaller than the 44px target size. */
+function smallTargetsIn(page, selector) {
+  return page.evaluate((sel) => {
+    const root = document.querySelector(sel);
+    if (!root) return [`${sel} missing`];
+    return [...root.querySelectorAll("button, a")]
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && (r.width < 44 || r.height < 44);
+      })
+      .map((el) => `${el.tagName}.${(el.className || "").slice(0, 40)}`);
+  }, selector);
+}
+
+async function countMiraMessages(page) {
+  return page.locator(".msg--mira").count();
 }
 
 try {
@@ -108,7 +127,7 @@ try {
         })
         .map((el) => `${el.tagName}.${(el.className || "").slice(0, 30)}`)
     );
-    check(`${width}px: no tap targets under 44px`, smallTargets.length === 0);
+    check(`${width}px: no tap targets under 44px`, smallTargets.length === 0, smallTargets);
 
     // Drawer opens and closes.
     await page.click(".header__menu");
@@ -123,6 +142,113 @@ try {
     await page.press("#composer-input", "Enter");
     await page.waitForSelector(".msg--mira .bubble", { timeout: 30_000 });
     check(`${width}px: send renders a reply`, true);
+
+    // ---- model picker ----
+    await page.click(".model-chip");
+    await page.waitForSelector(".model-menu", { timeout: 10_000 });
+    check(`${width}px: model chip opens the picker`, await page.locator(".model-menu").isVisible());
+
+    const menuTargets = await smallTargetsIn(page, ".model-menu");
+    check(
+      `${width}px: model menu targets are at least 44px`,
+      menuTargets.length === 0,
+      menuTargets
+    );
+
+    const menuOverflow = await page.evaluate(() => ({
+      scrollW: document.documentElement.scrollWidth,
+      clientW: document.documentElement.clientWidth,
+    }));
+    check(
+      `${width}px: no horizontal scroll with the model menu open`,
+      menuOverflow.scrollW <= menuOverflow.clientW + 1
+    );
+
+    await page.click('.model-item:has-text("llama-3.1-8b-instant")');
+    await page.waitForTimeout(250);
+    check(
+      `${width}px: picking a model updates the chip`,
+      (await page.locator(".model-chip__name").innerText()).includes("llama-3.1-8b-instant")
+    );
+
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".status", { timeout: 30_000 });
+    check(
+      `${width}px: the model choice survives a reload`,
+      (await page.locator(".model-chip__name").innerText()).includes("llama-3.1-8b-instant")
+    );
+
+    // ---- settings: key + memory ----
+    await page.click('.header .icon-btn[aria-label="Settings"]');
+    await page.waitForSelector(".dialog", { timeout: 10_000 });
+    // Let the open animation finish before measuring, or every target reads
+    // 1% smaller than it really is.
+    await page.waitForTimeout(350);
+    check(`${width}px: the settings dialog opens`, await page.locator(".dialog").isVisible());
+
+    const dialogTargets = await smallTargetsIn(page, ".dialog");
+    check(
+      `${width}px: settings targets are at least 44px`,
+      dialogTargets.length === 0,
+      dialogTargets
+    );
+
+    // A key lives under its own provider, in this browser only.
+    await page.fill(".field__group input", "sk-test-key-123");
+
+    await page.click('.tabs__btn:has-text("Memory")');
+    await page.waitForTimeout(200);
+    await page.fill(".memory-add input", "I live in India and prefer TypeScript");
+    await page.click(".memory-add button");
+    await page.waitForSelector(".memory-item", { timeout: 5000 });
+    check(`${width}px: a fact can be added to shared memory`, true);
+
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    check(`${width}px: Escape closes the settings dialog`, !(await page.locator(".dialog").isVisible()));
+
+    // Send with the key and the memory, then inspect what actually left.
+    const before = await countMiraMessages(page);
+    await page.fill("#composer-input", "what do you remember about me?");
+    await page.press("#composer-input", "Enter");
+    await page.waitForFunction(
+      (count) => document.querySelectorAll(".msg--mira").length > count,
+      before,
+      { timeout: 30_000 }
+    );
+
+    const last = await (await fetch(`${BACKEND_URL}/test/last`)).json();
+    const headers = last.headers ?? {};
+    check(
+      `${width}px: provider and model travel as headers`,
+      headers["x-provider"] === "groq" && headers["x-model"] === "llama-3.1-8b-instant"
+    );
+    check(
+      `${width}px: the key travels as a header, never in the body`,
+      headers["x-provider-key"] === "sk-test-key-123" &&
+        !JSON.stringify(last.body ?? {}).includes("sk-test-key-123")
+    );
+    check(
+      `${width}px: the shared memory is sent with the message`,
+      Array.isArray(last.body?.memory) &&
+        last.body.memory.includes("I live in India and prefer TypeScript")
+    );
+
+    // ---- memory survives a reload, and can be forgotten ----
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".status", { timeout: 30_000 });
+    await page.click('.header .icon-btn[aria-label="Settings"]');
+    await page.click('.tabs__btn:has-text("Memory")');
+    await page.waitForTimeout(200);
+    check(
+      `${width}px: memory survives a reload`,
+      (await page.locator('.memory-item:has-text("I live in India")').count()) === 1
+    );
+
+    await page.click('.memory-item button[aria-label^="Forget:"]');
+    await page.waitForSelector(".memory-empty", { timeout: 5000 });
+    check(`${width}px: forgetting a fact removes it`, true);
+    await page.keyboard.press("Escape");
 
     await context.close();
   }
