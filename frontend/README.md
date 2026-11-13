@@ -38,6 +38,17 @@ Keys are sent per request in an `X-Provider-Key` header and are never written to
 trade-off is stated in the dialog: anyone with access to the browser can read them, so it is not
 for a shared computer.
 
+## Performance
+
+The initial bundle carries only what the first paint needs. `Drawer` and `SettingsDialog` are
+`React.lazy` chunks loaded the first time they open, finished messages are memoised so a streaming
+reply does not re-render the whole thread, and Inter is self-hosted from `public/fonts` and
+preloaded instead of fetched from Google Fonts. Image assets have dedicated small variants
+(`favicon-32.png`, `apple-touch-icon.png`, `mira-mark-96.jpg`).
+
+A debounced IndexedDB save is flushed on `pagehide` and when the tab becomes hidden, so closing or
+backgrounding the page mid-reply does not drop the newest turn.
+
 ## Layout
 
 ```
