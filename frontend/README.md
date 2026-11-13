@@ -29,6 +29,11 @@ Everything the visitor can tune lives under `mira.settings.v1` in `localStorage`
 provider and model, one API key per provider, the shared memory, custom instructions, persona and
 theme. There is no account and no server-side storage.
 
+Conversations live in IndexedDB (`mira-chats`) because messages now carry variants, pinned turns
+and a rolling summary. The two older `localStorage` formats (`mira.chats.v2` and `mira.chat.v1`)
+are migrated once on first load; the old copy is only removed after the IndexedDB write succeeds.
+If IndexedDB is unavailable, chat storage falls back to `localStorage` instead of failing.
+
 Keys are sent per request in an `X-Provider-Key` header and are never written to the backend. The
 trade-off is stated in the dialog: anyone with access to the browser can read them, so it is not
 for a shared computer.
