@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
   CheckIcon,
+  EditIcon,
   ExternalLinkIcon,
   EyeIcon,
   EyeOffIcon,
@@ -47,6 +48,7 @@ export default function SettingsDialog({
   onSetKey,
   onAddMemory,
   onRemoveMemory,
+  onEditMemory,
   onClearMemory,
   onClearKeys,
   onResetAll,
@@ -57,6 +59,7 @@ export default function SettingsDialog({
   const [tab, setTab] = useState(initialTab);
   const [reveal, setReveal] = useState(false);
   const [fact, setFact] = useState("");
+  const [editing, setEditing] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const panelRef = useRef(null);
   const closeRef = useRef(null);
@@ -68,6 +71,7 @@ export default function SettingsDialog({
     setTab(initialTab);
     setReveal(false);
     setFact("");
+    setEditing(null);
     setConfirm(null);
     closeRef.current?.focus();
   }, [open, initialTab]);
@@ -357,15 +361,68 @@ export default function SettingsDialog({
                   <ul className="memory-list">
                     {settings.memory.map((item, index) => (
                       <li key={`${item}-${index}`} className="memory-item">
-                        <span className="memory-item__text">{item}</span>
-                        <button
-                          type="button"
-                          className="icon-btn icon-btn--sm"
-                          onClick={() => onRemoveMemory(index)}
-                          aria-label={`Forget: ${item}`}
-                        >
-                          <XIcon size={14} />
-                        </button>
+                        {editing?.index === index ? (
+                          <form
+                            className="memory-item__edit"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              if (onEditMemory(index, editing.text)) setEditing(null);
+                            }}
+                          >
+                            <label className="sr-only" htmlFor={`${id}-edit-${index}`}>
+                              Edit remembered fact
+                            </label>
+                            <input
+                              id={`${id}-edit-${index}`}
+                              className="field__input"
+                              value={editing.text}
+                              maxLength={MAX_MEMORY_CHARS}
+                              autoFocus
+                              onChange={(event) =>
+                                setEditing({ index, text: event.target.value })
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape") setEditing(null);
+                              }}
+                            />
+                            <button
+                              type="submit"
+                              className="icon-btn icon-btn--sm"
+                              aria-label="Save fact"
+                              disabled={!editing.text.trim()}
+                            >
+                              <CheckIcon size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn icon-btn--sm"
+                              aria-label="Cancel editing"
+                              onClick={() => setEditing(null)}
+                            >
+                              <XIcon size={14} />
+                            </button>
+                          </form>
+                        ) : (
+                          <>
+                            <span className="memory-item__text">{item}</span>
+                            <button
+                              type="button"
+                              className="icon-btn icon-btn--sm"
+                              onClick={() => setEditing({ index, text: item })}
+                              aria-label={`Edit: ${item}`}
+                            >
+                              <EditIcon size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn icon-btn--sm"
+                              onClick={() => onRemoveMemory(index)}
+                              aria-label={`Forget: ${item}`}
+                            >
+                              <XIcon size={14} />
+                            </button>
+                          </>
+                        )}
                       </li>
                     ))}
                   </ul>

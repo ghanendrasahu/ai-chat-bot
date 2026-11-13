@@ -25,6 +25,7 @@ function TypingIndicator() {
 export default function Thread({
   messages,
   pending,
+  loading,
   model,
   provider,
   memoryCount,
@@ -32,10 +33,17 @@ export default function Thread({
   onRetry,
   onRegenerate,
   onSaveMemory,
+  onEdit,
+  onDelete,
+  onPin,
+  onSwitchVariant,
+  onEditSaved,
 }) {
   const scrollRef = useRef(null);
   const atBottomRef = useRef(true);
+  const wasPending = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
+  const [announcement, setAnnouncement] = useState("");
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -66,11 +74,27 @@ export default function Thread({
     el.scrollTop = el.scrollHeight;
   }, [messages, pending]);
 
-  const isEmpty = messages.length === 0 && !pending;
+  // Announce the end of a reply once - never every streamed token.
+  useEffect(() => {
+    if (wasPending.current && !pending) setAnnouncement("Mira finished replying.");
+    wasPending.current = pending;
+  }, [pending]);
+
+  const isEmpty = messages.length === 0 && !pending && !loading;
+  const lastIndex = messages.length - 1;
+  const hasStreamingText = messages.some(
+    (message) => message.status === "streaming" && message.text?.trim()
+  );
 
   return (
     <main className="main" ref={scrollRef} onScroll={handleScroll}>
       <div className="thread">
+        {loading && messages.length === 0 ? (
+          <p className="thread__loading" role="status">
+            Loading conversations…
+          </p>
+        ) : null}
+
         {isEmpty ? (
           <EmptyState
             onPick={onPick}
@@ -87,19 +111,34 @@ export default function Thread({
           aria-relevant="additions"
           aria-label="Conversation"
         >
-          {messages.map((message, index) => (
-            <Message
-              key={message.id}
-              message={message}
-              onRetry={onRetry}
-              onRegenerate={onRegenerate}
-              onSaveMemory={onSaveMemory}
-              isLast={index === messages.length - 1}
-            />
-          ))}
-          {pending ? <TypingIndicator /> : null}
+          {messages.map((message, index) => {
+            // The placeholder exists from the moment Send is pressed, but it
+            // should not render as an empty bubble while waiting for token 1.
+            if (message.status === "streaming" && !message.text?.trim()) return null;
+            return (
+              <Message
+                key={message.id}
+                message={message}
+                onRetry={onRetry}
+                onRegenerate={onRegenerate}
+                onSaveMemory={onSaveMemory}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onPin={onPin}
+                onSwitchVariant={onSwitchVariant}
+                onEditSaved={onEditSaved}
+                isLast={index === lastIndex}
+                pending={pending}
+              />
+            );
+          })}
+          {pending && !hasStreamingText ? <TypingIndicator /> : null}
         </div>
       </div>
+
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
 
       {atBottom ? null : (
         <button
