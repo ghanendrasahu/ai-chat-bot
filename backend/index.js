@@ -15,11 +15,33 @@ const hasBuiltFrontend = existsSync(path.join(distDir, "index.html"));
 
 const ACCESS_TOKEN = (process.env.CHAT_ACCESS_TOKEN || "").trim();
 const MAX_MESSAGE_CHARS = 2000;
-const MAX_HISTORY_MESSAGES = 12;
-const MAX_HISTORY_CHARS = 8000;
+// Context is bounded by an approximate token budget instead of a hard turn
+// count. The message/character caps are a backstop against absurd payloads.
+const MAX_HISTORY_MESSAGES = 40;
+const MAX_HISTORY_CHARS = 24_000;
+// Kept for backwards compatibility with callers of the exported sanitiser
+// (and the original tests). The routes use the larger limits above.
+const LEGACY_HISTORY_MESSAGES = 12;
+const LEGACY_HISTORY_CHARS = 8000;
+const MAX_CONTEXT_TOKENS = 6000;
+const MAX_PINNED_MESSAGES = 8;
+const MAX_PINNED_CHARS = 6000;
+const MAX_SUMMARY_CHARS = 3200;
+const MAX_TITLE_CHARS = 48;
+const MAX_TITLE_WORDS = 4;
+const MAX_CHAT_INSTRUCTIONS_CHARS = 1000;
+const TITLE_MAX_TOKENS = 24;
+const SUMMARY_MAX_TOKENS = 180;
+// Once a summary exists, don't pay for another summary call on every single
+// turn. Roll it forward only when at least this many newer turns have fallen
+// out of the budget since the last summary.
+const SUMMARY_MIN_NEW_MESSAGES = 4;
+// A stream that never ends would hold a socket until the platform kills it.
+const STREAM_TIMEOUT_MS = Number(process.env.CHAT_STREAM_TIMEOUT_MS || 45_000);
 // The body has to carry the current message plus the history we are willing
-// to read: 11 messages of 2,000 characters, worst case with JSON escaping.
-const MAX_BODY_SIZE = "256kb";
+// to read. The token budget is what actually limits what reaches a provider;
+// this only stops a huge JSON body from being parsed at all.
+const MAX_BODY_SIZE = "512kb";
 
 // ---- shared memory (one list, read by every model) ----
 const MAX_MEMORY_ITEMS = 40;
@@ -82,6 +104,11 @@ const RATE_MAX_PER_DAY = Number(process.env.CHAT_DAILY_LIMIT || 400);
 // what actually bounds the damage if that identity is spoofed.
 const GLOBAL_MAX_PER_WINDOW = Number(process.env.CHAT_GLOBAL_LIMIT || 120);
 const GLOBAL_MAX_PER_DAY = Number(process.env.CHAT_GLOBAL_DAILY_LIMIT || 1500);
+// Titles and summaries are cheap auxiliary calls attached to a conversation.
+// They get their own, larger allowance so a normal chat turn is not counted
+// three times against the message limit.
+const AUX_MAX_PER_WINDOW = Number(process.env.CHAT_AUX_LIMIT || 60);
+const AUX_MAX_PER_DAY = Number(process.env.CHAT_AUX_DAILY_LIMIT || 2000);
 // Upper bound on the number of IPs the limiter remembers.
 const MAX_TRACKED_IPS = 10_000;
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "http://localhost:5173")
@@ -181,9 +208,9 @@ function isGloballyLimited() {
   );
 }
 
-function isRateLimited(ip) {
+function countHit(map, ip) {
   const now = Date.now();
-  const entry = hits.get(ip) ?? {
+  const entry = map.get(ip) ?? {
     windowStart: now,
     windowCount: 0,
     dayStart: now,
@@ -202,18 +229,32 @@ function isRateLimited(ip) {
 
   // Re-insert so the map is ordered by last use, then drop the oldest
   // entries. Without a hard cap the map grows with every new IP.
-  hits.delete(ip);
-  hits.set(ip, entry);
-  if (hits.size > MAX_TRACKED_IPS) {
-    for (const [key, value] of hits) {
-      if (now - value.dayStart > 86_400_000) hits.delete(key);
+  map.delete(ip);
+  map.set(ip, entry);
+  if (map.size > MAX_TRACKED_IPS) {
+    for (const [key, value] of map) {
+      if (now - value.dayStart > 86_400_000) map.delete(key);
     }
-    while (hits.size > MAX_TRACKED_IPS) {
-      hits.delete(hits.keys().next().value);
+    while (map.size > MAX_TRACKED_IPS) {
+      map.delete(map.keys().next().value);
     }
   }
 
+  return entry;
+}
+
+function isRateLimited(ip) {
+  const entry = countHit(hits, ip);
   return entry.windowCount > RATE_MAX_PER_WINDOW || entry.dayCount > RATE_MAX_PER_DAY;
+}
+
+// Title and summary calls ride along with a message, so they use a separate,
+// more generous bucket. Otherwise one turn would consume three slots.
+const auxHits = new Map();
+
+function isAuxLimited(ip) {
+  const entry = countHit(auxHits, ip);
+  return entry.windowCount > AUX_MAX_PER_WINDOW || entry.dayCount > AUX_MAX_PER_DAY;
 }
 
 function isAuthorized(req) {
@@ -316,6 +357,14 @@ export function resolveProviderConfig({ provider, apiKey, model } = {}) {
 // for that request and is then dropped with it.
 const serverClients = new Map();
 
+// Tests inject a fake client here so no test ever reaches a provider.
+let makeClient = (options) => new OpenAI(options);
+
+export function setClientFactory(factory) {
+  makeClient = typeof factory === "function" ? factory : (options) => new OpenAI(options);
+  serverClients.clear();
+}
+
 export function clientFor(config) {
   if (!config?.key) return null;
   const options = {
@@ -326,12 +375,12 @@ export function clientFor(config) {
   };
 
   if (config.keySource === "user") {
-    return new OpenAI(options);
+    return makeClient(options);
   }
 
   const cached = serverClients.get(config.id);
   if (cached && cached.signature === config.key) return cached.client;
-  const client = new OpenAI(options);
+  const client = makeClient(options);
   serverClients.set(config.id, { signature: config.key, client });
   return client;
 }
@@ -380,6 +429,7 @@ export function sanitizeInstructions(input) {
 export function buildSystemPrompt({
   persona = DEFAULT_PERSONA,
   instructions = "",
+  chatInstructions = "",
   memory = [],
 } = {}) {
   const parts = [PERSONAS[persona] ?? PERSONAS[DEFAULT_PERSONA]];
@@ -393,6 +443,10 @@ export function buildSystemPrompt({
 
   if (instructions) {
     parts.push(`How the user asked you to respond:\n${instructions}`);
+  }
+
+  if (chatInstructions) {
+    parts.push(`Extra instructions for this conversation only:\n${chatInstructions}`);
   }
 
   parts.push(PROMPT_RULES);
@@ -434,14 +488,20 @@ function providerError(err) {
  * Keeps the recent turns of the conversation so Mira can answer with the
  * thread in mind. Only known roles and plain text survive, and the total
  * size is capped so a long thread cannot blow up the request.
+ *
+ * The defaults are the original (exported) limits. The routes pass the larger
+ * limits; actual context size is enforced by the token budget below.
  */
-function sanitizeHistory(input) {
+function sanitizeHistory(
+  input,
+  { maxMessages = LEGACY_HISTORY_MESSAGES, maxChars = LEGACY_HISTORY_CHARS } = {}
+) {
   if (!Array.isArray(input)) return [];
   const clean = [];
-  let budget = MAX_HISTORY_CHARS;
+  let budget = maxChars;
 
   for (let i = input.length - 1; i >= 0; i -= 1) {
-    if (clean.length >= MAX_HISTORY_MESSAGES) break;
+    if (clean.length >= maxMessages) break;
     const item = input[i];
     if (!item || typeof item !== "object") continue;
 
@@ -465,35 +525,207 @@ function sanitizeHistory(input) {
   return clean;
 }
 
-app.post("/chat", async (req, res) => {
-  if (!isAuthorized(req)) {
-    return res.status(401).json({ error: "Unauthorized" });
+/** Approximate token count. One helper so the estimate is easy to swap. */
+export function estimateTokens(text) {
+  return Math.ceil(String(text ?? "").length / 4);
+}
+
+/** Pinned turns are always sent, but still bounded. */
+export function sanitizePinned(input) {
+  if (!Array.isArray(input)) return [];
+  const clean = [];
+  const seen = new Set();
+  let budget = MAX_PINNED_CHARS;
+
+  for (const item of input) {
+    if (clean.length >= MAX_PINNED_MESSAGES) break;
+    if (!item || typeof item !== "object") continue;
+    const role = item.role === "user" ? "user" : item.role === "assistant" ? "assistant" : null;
+    if (!role) continue;
+    const content = typeof item.content === "string" ? item.content.trim() : "";
+    if (!content) continue;
+    const clipped = content.slice(0, MAX_MESSAGE_CHARS);
+    const fingerprint = `${role}:${clipped}`;
+    if (seen.has(fingerprint)) continue;
+    if (budget - clipped.length < 0) break;
+    budget -= clipped.length;
+    seen.add(fingerprint);
+    clean.push({ role, content: clipped });
   }
-  const ip = req.ip || req.socket.remoteAddress || "unknown";
+
+  return clean;
+}
+
+/** The cached rolling summary of turns that fell out of the budget. */
+export function sanitizeSummary(input) {
+  if (typeof input !== "string") return "";
+  return input
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_SUMMARY_CHARS);
+}
+
+/** Per-chat instructions sit on top of the global ones. */
+export function sanitizeChatInstructions(input) {
+  if (typeof input !== "string") return "";
+  return input
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, MAX_CHAT_INSTRUCTIONS_CHARS);
+}
+
+/**
+ * Turns whatever the model said into a short, safe chat title. Models like to
+ * wrap titles in quotes or Markdown, so strip that rather than storing it.
+ */
+export function sanitizeTitle(input) {
+  if (typeof input !== "string") return "";
+  const firstLine =
+    input
+      .replace(/```[A-Za-z0-9_+-]*|```/g, " ")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? "";
+  const cleaned = firstLine
+    .replace(/^\s*(title|chat title)\s*[:=-]\s*/i, "")
+    .replace(/[*_`~#]/g, "")
+    .replace(/[“”‘’"']/g, "")
+    .replace(/[.,;:!?()[\]{}<>|/\\]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "";
+  const words = cleaned.split(" ").slice(0, MAX_TITLE_WORDS).join(" ");
+  return words.replace(/[.,;:!?]+$/g, "").slice(0, MAX_TITLE_CHARS).trim();
+}
+
+/**
+ * Keeps the newest turns that fit the token budget. Pinned turns are included
+ * first and are never part of the overflow, so they can never be summarized
+ * away. `overflow` is chronological and is what a summary call receives.
+ */
+export function selectContext(
+  history,
+  { pinned = [], summary = "", maxTokens = MAX_CONTEXT_TOKENS } = {}
+) {
+  const summaryTokens = summary ? estimateTokens(summary) + 12 : 0;
+  let budget = Math.max(0, maxTokens - summaryTokens);
+
+  const keptPinned = [];
+  for (const turn of pinned) {
+    const cost = estimateTokens(turn.content) + 4;
+    if (cost > budget) break;
+    budget -= cost;
+    keptPinned.push(turn);
+  }
+
+  const kept = [];
+  let overflow = [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const turn = history[i];
+    const cost = estimateTokens(turn.content) + 4;
+    if (cost > budget) {
+      overflow = history.slice(0, i + 1);
+      break;
+    }
+    budget -= cost;
+    kept.unshift(turn);
+  }
+
+  return { pinned: keptPinned, kept, overflow };
+}
+
+/** Builds the exact message list sent to the provider. */
+export function buildMessages({
+  message,
+  history = [],
+  pinned = [],
+  summary = "",
+  persona,
+  instructions,
+  chatInstructions,
+  memory,
+}) {
+  const messages = [
+    {
+      role: "system",
+      content: buildSystemPrompt({ persona, instructions, chatInstructions, memory }),
+    },
+  ];
+  if (summary) {
+    messages.push({
+      role: "system",
+      content: `Summary of earlier turns in this conversation (do not repeat it back):\n${summary}`,
+    });
+  }
+  messages.push(...pinned, ...history, { role: "user", content: message });
+  return messages;
+}
+
+const TITLE_PROMPT =
+  "Write a short title for this conversation. Reply with at most four words, no quotes, no punctuation at the end, no Markdown. Describe the topic, not the question.";
+const SUMMARY_PROMPT =
+  "Summarize this part of a conversation for future context. Keep names, decisions, constraints and preferences. At most 120 words, plain text, no Markdown, do not address the reader.";
+
+function logProviderFailure(scope, config, err) {
+  // Only the status and message - never the provider's raw payload and never
+  // a key.
+  console.error(`${scope} failed:`, {
+    provider: config.id,
+    status: err?.status ?? null,
+    message: err?.message ?? String(err),
+  });
+}
+
+function sendProviderFailure(res, config, err, scope = "chat completion") {
+  logProviderFailure(scope, config, err);
+  const failure = providerError(err);
+  if (failure.code === "provider_rate_limited") res.set("Retry-After", "20");
+  return res.status(failure.status).json({ error: failure.message, code: failure.code });
+}
+
+function clientIp(req) {
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+/**
+ * Every check that happens before a provider is called. Shared by the JSON
+ * and SSE routes so they can never drift apart. The rate limit is counted at
+ * request start, whether or not the provider later succeeds.
+ */
+function prepareChat(req, res) {
+  if (!isAuthorized(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return null;
+  }
+  const ip = clientIp(req);
   if (isRateLimited(ip)) {
-    return res
+    res
       .set("Retry-After", String(Math.ceil(RATE_WINDOW_MS / 1000)))
       .status(429)
       .json({ error: "Too many messages. Please wait a moment." });
+    return null;
   }
-  // The service-wide ceiling, checked against the clock rather than against
-  // anything the client controls.
   if (isGloballyLimited()) {
-    return res
+    res
       .set("Retry-After", String(Math.ceil(RATE_WINDOW_MS / 1000)))
       .status(429)
       .json({ error: "The chat is busy right now. Please wait a moment." });
+    return null;
   }
 
   const message =
     typeof req.body?.message === "string" ? req.body.message.trim() : "";
   if (!message) {
-    return res.status(400).json({ error: "Message is required" });
+    res.status(400).json({ error: "Message is required" });
+    return null;
   }
   if (message.length > MAX_MESSAGE_CHARS) {
-    return res.status(400).json({
+    res.status(400).json({
       error: `Message is too long (limit ${MAX_MESSAGE_CHARS} characters)`,
     });
+    return null;
   }
 
   const config = resolveProviderConfig({
@@ -502,33 +734,185 @@ app.post("/chat", async (req, res) => {
     model: req.get("x-model"),
   });
   if (config.error) {
-    return res.status(400).json({ error: config.error, code: "invalid_config" });
+    res.status(400).json({ error: config.error, code: "invalid_config" });
+    return null;
   }
 
   const api = clientFor(config);
   if (!api) {
-    return res.status(503).json({
+    res.status(503).json({
       error: `No ${config.label} API key is configured. Add one in Settings.`,
       code: "no_key",
     });
+    return null;
   }
 
-  const history = sanitizeHistory(req.body?.history);
-  const memory = sanitizeMemory(req.body?.memory);
-  const instructions = sanitizeInstructions(req.body?.instructions);
   const persona =
     typeof req.body?.persona === "string" && PERSONAS[req.body.persona]
       ? req.body.persona
       : DEFAULT_PERSONA;
 
+  return {
+    ip,
+    message,
+    config,
+    api,
+    persona,
+    history: sanitizeHistory(req.body?.history, {
+      maxMessages: MAX_HISTORY_MESSAGES,
+      maxChars: MAX_HISTORY_CHARS,
+    }),
+    pinned: sanitizePinned(req.body?.pinned),
+    memory: sanitizeMemory(req.body?.memory),
+    instructions: sanitizeInstructions(req.body?.instructions),
+    chatInstructions: sanitizeChatInstructions(req.body?.chatInstructions),
+    summary: sanitizeSummary(req.body?.summary),
+    summaryCount: Number.isFinite(Number(req.body?.summaryCount))
+      ? Math.max(0, Math.min(500, Math.trunc(Number(req.body.summaryCount))))
+      : 0,
+  };
+}
+
+/** Shared auth/validation for the cheap title and summary calls. */
+function prepareAux(req, res, { requireMessage = false } = {}) {
+  if (!isAuthorized(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return null;
+  }
+  if (isAuxLimited(clientIp(req))) {
+    res
+      .set("Retry-After", String(Math.ceil(RATE_WINDOW_MS / 1000)))
+      .status(429)
+      .json({ error: "Too many requests. Please wait a moment." });
+    return null;
+  }
+
+  const message =
+    typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (requireMessage) {
+    if (!message) {
+      res.status(400).json({ error: "Message is required" });
+      return null;
+    }
+    if (message.length > MAX_MESSAGE_CHARS) {
+      res.status(400).json({
+        error: `Message is too long (limit ${MAX_MESSAGE_CHARS} characters)`,
+      });
+      return null;
+    }
+  }
+
+  const config = resolveProviderConfig({
+    provider: req.get("x-provider"),
+    apiKey: req.get("x-provider-key"),
+    model: req.get("x-model"),
+  });
+  if (config.error) {
+    res.status(400).json({ error: config.error, code: "invalid_config" });
+    return null;
+  }
+
+  const api = clientFor(config);
+  if (!api) {
+    res.status(503).json({
+      error: `No ${config.label} API key is configured. Add one in Settings.`,
+      code: "no_key",
+    });
+    return null;
+  }
+  return { config, api, message };
+}
+
+async function summarizeTurns(api, config, { previous = "", turns = [] }) {
+  const transcript = turns
+    .map((turn) => `${turn.role === "user" ? "User" : "Mira"}: ${turn.content}`)
+    .join("\n");
+  if (!transcript.trim()) return previous;
+
+  const content = previous
+    ? `Existing summary:\n${previous}\n\nNew turns to fold into it:\n${transcript}`
+    : transcript;
+
+  const response = await api.chat.completions.create({
+    model: config.model,
+    max_tokens: SUMMARY_MAX_TOKENS,
+    messages: [
+      { role: "system", content: SUMMARY_PROMPT },
+      { role: "user", content: content.slice(0, 16_000) },
+    ],
+  });
+  const summary = sanitizeSummary(response.choices?.[0]?.message?.content);
+  if (!summary) throw new Error("empty summary");
+  return summary;
+}
+
+/**
+ * Fits the conversation into the token budget and rolls a cached summary
+ * forward when enough old turns have fallen out. Any failure simply leaves
+ * the plain trimmed context in place - a summary is an optimisation, never a
+ * reason to fail a message.
+ */
+async function withRollingSummary(api, config, request) {
+  const context = selectContext(request.history, {
+    pinned: request.pinned,
+    summary: request.summary,
+  });
+
+  if (context.overflow.length === 0) {
+    return { ...context, summary: request.summary, summaryCount: request.summaryCount, updated: false };
+  }
+
+  const grewEnough =
+    context.overflow.length >= request.summaryCount + SUMMARY_MIN_NEW_MESSAGES;
+  if (request.summary && !grewEnough) {
+    return { ...context, summary: request.summary, summaryCount: request.summaryCount, updated: false };
+  }
+
   try {
-    const response = await api.chat.completions.create({
-      model: config.model,
-      messages: [
-        { role: "system", content: buildSystemPrompt({ persona, instructions, memory }) },
-        ...history,
-        { role: "user", content: message },
-      ],
+    const summary = await summarizeTurns(api, config, {
+      previous: request.summary,
+      turns: context.overflow,
+    });
+    const next = selectContext(request.history, {
+      pinned: request.pinned,
+      summary,
+    });
+    return {
+      ...next,
+      summary,
+      summaryCount: context.overflow.length,
+      updated: true,
+    };
+  } catch (err) {
+    logProviderFailure("summary", config, err);
+    // Plain trimming: the newest turns still fit, older ones are dropped.
+    return { ...context, summary: request.summary, summaryCount: request.summaryCount, updated: false };
+  }
+}
+
+function writeEvent(res, event, data) {
+  if (res.writableEnded) return;
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+app.post("/chat", async (req, res) => {
+  const request = prepareChat(req, res);
+  if (!request) return;
+
+  try {
+    const context = await withRollingSummary(request.api, request.config, request);
+    const response = await request.api.chat.completions.create({
+      model: request.config.model,
+      messages: buildMessages({
+        message: request.message,
+        history: context.kept,
+        pinned: context.pinned,
+        summary: context.summary,
+        persona: request.persona,
+        instructions: request.instructions,
+        chatInstructions: request.chatInstructions,
+        memory: request.memory,
+      }),
     });
 
     const reply = response.choices[0]?.message?.content;
@@ -537,23 +921,194 @@ app.post("/chat", async (req, res) => {
     // user switches models mid-thread.
     res.json({
       reply,
-      model: config.model,
-      provider: config.id,
-      keySource: config.keySource,
+      model: request.config.model,
+      provider: request.config.id,
+      keySource: request.config.keySource,
+      summary: context.summary,
+      summaryCount: context.summaryCount,
     });
   } catch (err) {
-    // Log the provider detail, never return it to the browser - and never the
-    // key. Only the status and message are logged.
-    console.error("chat completion failed:", {
-      provider: config.id,
-      status: err?.status ?? null,
-      message: err?.message ?? String(err),
-    });
-    const failure = providerError(err);
-    if (failure.code === "provider_rate_limited") {
-      res.set("Retry-After", "20");
+    sendProviderFailure(res, request.config, err);
+  }
+});
+
+app.post("/chat/stream", async (req, res) => {
+  const request = prepareChat(req, res);
+  if (!request) return;
+
+  let stream = null;
+  let finished = false;
+  let timer = null;
+  const upstream = new AbortController();
+
+  // Abort the upstream request when the browser goes away, and mark the loop
+  // so it does not try to write to a dead socket.
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (timer) clearTimeout(timer);
+    upstream.abort();
+    try {
+      stream?.controller?.abort?.();
+    } catch {
+      // ignore
     }
-    res.status(failure.status).json({ error: failure.message, code: failure.code });
+    try {
+      stream?.return?.();
+    } catch {
+      // ignore
+    }
+  };
+  // `req` emits close when its body is fully read, which is not a disconnect.
+  // Only treat it as one when the response socket was actually destroyed.
+  req.on("close", () => {
+    if (res.destroyed) finish();
+  });
+  // A response close before it finished means the browser went away.
+  res.on("close", () => {
+    if (!res.writableFinished) finish();
+  });
+
+  try {
+    // Summaries happen before the first token, so a failure here can still be
+    // a normal JSON error rather than an SSE error event.
+    const context = await withRollingSummary(request.api, request.config, request);
+    if (finished || res.writableEnded) return;
+
+    stream = await request.api.chat.completions.create(
+      {
+        model: request.config.model,
+        messages: buildMessages({
+          message: request.message,
+          history: context.kept,
+          pinned: context.pinned,
+          summary: context.summary,
+          persona: request.persona,
+          instructions: request.instructions,
+          chatInstructions: request.chatInstructions,
+          memory: request.memory,
+        }),
+        stream: true,
+      },
+      { signal: upstream.signal }
+    );
+
+    if (finished || res.destroyed || res.writableEnded) {
+      finish();
+      return;
+    }
+
+    // Headers are only written once the upstream stream exists: connection
+    // and provider errors before this point keep the readable JSON shape.
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    timer = setTimeout(() => {
+      if (finished || res.writableEnded) return;
+      finished = true;
+      upstream.abort();
+      try {
+        stream?.controller?.abort?.();
+        stream?.return?.();
+      } catch {
+        // ignore
+      }
+      writeEvent(res, "error", {
+        error: "The reply took too long. Please try again.",
+        code: "timeout",
+      });
+      res.end();
+    }, STREAM_TIMEOUT_MS);
+
+    let reply = "";
+    for await (const chunk of stream) {
+      if (finished) break;
+      const token = chunk.choices?.[0]?.delta?.content;
+      if (!token) continue;
+      reply += token;
+      writeEvent(res, "token", { t: token });
+    }
+
+    if (finished || res.writableEnded) return;
+    if (!reply.trim()) throw new Error("empty completion");
+
+    writeEvent(res, "done", {
+      reply,
+      model: request.config.model,
+      provider: request.config.id,
+      keySource: request.config.keySource,
+      summary: context.summary,
+      summaryCount: context.summaryCount,
+    });
+    res.end();
+  } catch (err) {
+    if (finished || res.writableEnded) return;
+    logProviderFailure("chat stream", request.config, err);
+    if (!res.headersSent) {
+      // The stream never started, so answer like /chat does.
+      const failure = providerError(err);
+      if (failure.code === "provider_rate_limited") res.set("Retry-After", "20");
+      return res
+        .status(failure.status)
+        .json({ error: failure.message, code: failure.code });
+    }
+    const failure = providerError(err);
+    writeEvent(res, "error", { error: failure.message, code: failure.code });
+    res.end();
+  } finally {
+    finished = true;
+    if (timer) clearTimeout(timer);
+  }
+});
+
+app.post("/title", async (req, res) => {
+  const prepared = prepareAux(req, res, { requireMessage: true });
+  if (!prepared) return;
+
+  try {
+    const response = await prepared.api.chat.completions.create({
+      model: prepared.config.model,
+      max_tokens: TITLE_MAX_TOKENS,
+      messages: [
+        { role: "system", content: TITLE_PROMPT },
+        { role: "user", content: prepared.message.slice(0, 1000) },
+      ],
+    });
+    const title = sanitizeTitle(response.choices?.[0]?.message?.content);
+    if (!title) throw new Error("empty title");
+    res.set("Cache-Control", "no-store");
+    res.json({ title });
+  } catch (err) {
+    sendProviderFailure(res, prepared.config, err, "title");
+  }
+});
+
+app.post("/summary", async (req, res) => {
+  const prepared = prepareAux(req, res);
+  if (!prepared) return;
+
+  const previous = sanitizeSummary(req.body?.previous);
+  const turns = sanitizeHistory(req.body?.messages, {
+    maxMessages: MAX_HISTORY_MESSAGES,
+    maxChars: MAX_HISTORY_CHARS,
+  });
+  if (turns.length === 0 && !previous) {
+    return res.status(400).json({ error: "Nothing to summarize" });
+  }
+
+  try {
+    const summary = await summarizeTurns(prepared.api, prepared.config, {
+      previous,
+      turns,
+    });
+    res.set("Cache-Control", "no-store");
+    res.json({ summary });
+  } catch (err) {
+    sendProviderFailure(res, prepared.config, err, "summary");
   }
 });
 
