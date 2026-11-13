@@ -1,6 +1,6 @@
 /* Mira service worker: fresh shell, cached assets, offline fallback. */
 
-const VERSION = "mira-v1";
+const VERSION = "mira-v2";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -44,8 +44,17 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // The API is always network-first; never cached.
-  if (url.pathname.startsWith("/chat") || url.pathname.startsWith("/ping") || url.pathname.startsWith("/api") || url.pathname.startsWith("/health")) {
+  // The API is always network-first; never cached. That includes the stream,
+  // title and summary routes - a cached or buffered reply stream would break
+  // streaming entirely.
+  if (
+    url.pathname.startsWith("/chat") ||
+    url.pathname.startsWith("/title") ||
+    url.pathname.startsWith("/summary") ||
+    url.pathname.startsWith("/ping") ||
+    url.pathname.startsWith("/api") ||
+    url.pathname.startsWith("/health")
+  ) {
     event.respondWith(
       (async () => {
         try {

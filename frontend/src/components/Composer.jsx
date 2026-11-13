@@ -1,17 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { SendIcon, StopIcon } from "./Icons.jsx";
 
 const MAX_CHARS = 2000;
 const MAX_HEIGHT = 176;
 const counter = new Intl.NumberFormat();
 
-export default function Composer({ onSend, onStop, pending }) {
+const Composer = forwardRef(function Composer({ onSend, onStop, pending }, ref) {
   const [value, setValue] = useState("");
-  const ref = useRef(null);
+  const fieldRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      fieldRef.current?.focus();
+    },
+  }), []);
 
   // Grow with the content, up to a cap, then scroll inside the field.
   useEffect(() => {
-    const el = ref.current;
+    const el = fieldRef.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
@@ -50,7 +56,7 @@ export default function Composer({ onSend, onStop, pending }) {
           </label>
           <textarea
             id="composer-input"
-            ref={ref}
+            ref={fieldRef}
             className="composer__input"
             name="message"
             rows={1}
@@ -113,4 +119,6 @@ export default function Composer({ onSend, onStop, pending }) {
       </div>
     </div>
   );
-}
+});
+
+export default Composer;

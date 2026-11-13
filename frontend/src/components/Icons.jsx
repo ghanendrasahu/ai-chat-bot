@@ -262,3 +262,47 @@ export function MonitorIcon(props) {
     </Icon>
   );
 }
+
+export function MoreIcon(props) {
+  return (
+    <Icon {...props} fill="currentColor" stroke="none">
+      <circle cx="5" cy="12" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="19" cy="12" r="1.6" />
+    </Icon>
+  );
+}
+
+export function EditIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </Icon>
+  );
+}
+
+export function PinIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="M12 17v5" />
+      <path d="M9 10.8V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v5.8l2 3.2H7Z" />
+    </Icon>
+  );
+}
+
+export function ChevronLeftIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="m15 18-6-6 6-6" />
+    </Icon>
+  );
+}
+
+export function ChevronRightIcon(props) {
+  return (
+    <Icon {...props}>
+      <path d="m9 18 6-6-6-6" />
+    </Icon>
+  );
+}

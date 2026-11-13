@@ -49,15 +49,30 @@ tokens) costs roughly **$0.00019**, so 1,000 messages is around 20 cents - but i
   and every provider reads them. The same list travels with each request and is assembled into the
   system prompt server-side. Bookmark any message you sent to remember it.
 - **Persona and custom instructions** - Friendly, Concise, Technical or Creative, plus free-text
-  instructions such as "answer in bullet points", applied to every model.
+  instructions such as "answer in bullet points", applied to every model. A conversation can
+  override the tone and add instructions of its own without touching the global ones.
+- **Streaming replies** - tokens appear as the model writes them. **Stop** keeps the partial text
+  instead of throwing it away, and a dropped connection keeps it too, with a retry.
+- **Edit and resend** any message you sent: it replaces that turn, drops everything after it and
+  asks again. **Regenerate** keeps the old answers as variants (`‹ 2/3 ›`), so nothing is lost.
+- **Auto titles** - after the first reply the chat gets a short title from a cheap extra call;
+  rename it yourself in the drawer at any time.
 - Markdown rendering - headings, lists, bold/italic, inline code, links, blockquotes and fenced
-  code blocks with a copy button
-- **Regenerate** the last reply, copy any reply, retry a failed one
+  code blocks with a copy button. Partial replies render as they stream, including an unclosed
+  code fence.
+- **Copy, pin, delete** any message from its actions menu. Pinned turns are always sent as context
+  and are never summarised away.
 - **Search across conversations** in the drawer, plus new/delete/undo
 - Theme control (System / Light / Dark) that follows the OS live
-- Thread survives a refresh - conversations are kept in `localStorage`
+- **Conversations survive a refresh** - chats live in IndexedDB, with a one-time migration from the
+  old `localStorage` formats. Settings and keys deliberately stay in `localStorage`.
+- **Context that fits the model** - the server keeps the newest turns inside a token budget,
+  folds older ones into a cached rolling summary, and falls back to plain trimming if the summary
+  call fails.
 - Textarea composer: <kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, a
   character counter warns near the 2,000-character limit, and a stop button cancels a slow reply
+- **Memory you control** - edit or delete any remembered fact, and a dismissible "Remember this?"
+  chip offers durable facts you mention. Nothing is ever saved without a tap.
 - An honest status badge - it polls `/ping` and shows Ready, No model key or Offline
 - Per-IP rate limiting, a CORS allowlist, security headers, and provider errors that never reach
   the browser
@@ -88,7 +103,18 @@ The frontend runs on `http://localhost:5173` and calls the backend on `http://lo
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health`, `/ping` | `{ status, ready, provider, model, providers }` - used by the status badge |
-| `POST` | `/chat` | `{ message, history?, memory?, instructions?, persona? }` -> `{ reply, model, provider, keySource }` |
+| `POST` | `/chat` | `{ message, history?, pinned?, memory?, instructions?, chatInstructions?, persona?, summary?, summaryCount? }` -> `{ reply, model, provider, keySource, summary, summaryCount }` |
+| `POST` | `/chat/stream` | Same body and headers; answers as SSE (`token`, `done`, `error`) |
+| `POST` | `/title` | `{ message }` -> `{ title }`, at most four words |
+| `POST` | `/summary` | `{ previous?, messages }` -> `{ summary }` |
+
+`/chat/stream` sends `text/event-stream` with `Cache-Control: no-cache, no-transform`,
+`Connection: keep-alive` and `X-Accel-Buffering: no`. Each `token` event carries a `{ t }` chunk;
+`done` carries the full reply plus the model/provider and the updated summary. Validation, auth,
+origin and rate-limit failures that happen before the first token are ordinary JSON errors, the
+same shape as `/chat`. Mid-stream failures arrive as a safe `error` event. A server timeout
+(`CHAT_STREAM_TIMEOUT_MS`) ends a stream that never finishes, and a client disconnect aborts the
+upstream request.
 
 Optional request headers on `POST /chat`:
 
@@ -99,13 +125,18 @@ Optional request headers on `POST /chat`:
 | `X-Provider-Key` | The caller's own key. Used for this request only, never stored or logged. |
 | `X-Access-Token` | Required only when `CHAT_ACCESS_TOKEN` is set. |
 
-`history` is optional and takes up to 12 `{ role, content }` turns (`user` or `assistant` only).
-The server drops unknown roles, clips each turn to 2,000 characters and caps the total at 8,000.
+`history` is optional and may carry up to 40 `{ role, content }` turns (`user` or `assistant`
+only), capped at 24,000 characters. It is then fitted to a ~6,000-token budget server-side: the
+newest turns are kept, and older ones are folded into `summary`. Pinned turns travel separately
+in `pinned` (up to 8 turns / 6,000 characters) and are never trimmed or summarised.
 
 `memory` is an optional list of up to 40 short facts (300 characters each, 6,000 in total).
-`instructions` is at most 2,000 characters, and `persona` is one of `friendly`, `concise`,
-`technical`, `creative`. Everything is sanitized server-side and assembled into the system prompt,
-which is why the same memory works no matter which model answers.
+`instructions` is at most 2,000 characters, `chatInstructions` at most 1,000, and `persona` is one
+of `friendly`, `concise`, `technical`, `creative`. `chatInstructions` is layered on top of the
+global instructions and stored per conversation. `summary` is a cached summary of earlier turns,
+frozen as returned by the server; the server rolls it forward only when enough new turns have
+fallen out of the budget. Everything is sanitized server-side and assembled into the system
+prompt, which is why the same memory works no matter which model answers.
 
 ## Configuration
 
@@ -121,6 +152,9 @@ Backend variables (copy `backend/.env.example` to `backend/.env`):
 | `CHAT_DAILY_LIMIT` | `400` | Requests per IP per day |
 | `CHAT_GLOBAL_LIMIT` | `120` | Requests per minute for the whole service |
 | `CHAT_GLOBAL_DAILY_LIMIT` | `1500` | Requests per day for the whole service |
+| `CHAT_AUX_LIMIT` | `60` | Title/summary calls per IP per minute (a separate bucket) |
+| `CHAT_AUX_DAILY_LIMIT` | `2000` | Title/summary calls per IP per day |
+| `CHAT_STREAM_TIMEOUT_MS` | `45000` | Longest a stream may stay open |
 | `TRUST_PROXY` | `1` | Proxy hops to trust when reading `X-Forwarded-For` |
 | `CORS_ORIGIN` | `http://localhost:5173` | Comma-separated browser origins |
 

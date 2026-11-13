@@ -117,6 +117,36 @@ export function useSettings() {
     );
   }, []);
 
+  /** Rewrites one fact in place, keeping the same caps and dedupe rules. */
+  const editMemory = useCallback(
+    (index, raw) => {
+      const text = String(raw ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, MAX_MEMORY_CHARS);
+      if (!text) return false;
+      if (index < 0 || index >= settings.memory.length) return false;
+      if (
+        settings.memory.some(
+          (item, position) =>
+            position !== index && item.toLowerCase() === text.toLowerCase()
+        )
+      ) {
+        return false;
+      }
+      setSettings((prev) =>
+        sanitizeSettings({
+          ...prev,
+          memory: prev.memory.map((item, position) =>
+            position === index ? text : item
+          ),
+        })
+      );
+      return true;
+    },
+    [settings.memory]
+  );
+
   const clearMemory = useCallback(() => {
     setSettings((prev) => sanitizeSettings({ ...prev, memory: [] }));
   }, []);
@@ -167,6 +197,7 @@ export function useSettings() {
     setKey,
     addMemory,
     removeMemory,
+    editMemory,
     clearMemory,
     clearKeys,
     resetAll,
