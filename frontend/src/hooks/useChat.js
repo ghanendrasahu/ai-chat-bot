@@ -157,16 +157,27 @@ export function useChat({ onResult, config } = {}) {
     };
   }, [state, ready]);
 
-  // Flush the newest state if the page goes away mid-debounce.
-  useEffect(
-    () => () => {
-      if (readyRef.current && saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-        void saveStore(stateRef.current);
-      }
-    },
-    []
-  );
+  // Flush the newest state if the page goes away mid-debounce. `pagehide`
+  // covers navigation and bfcache, while visibilitychange covers a mobile tab
+  // switched to the background before the OS freezes it.
+  useEffect(() => {
+    const flush = () => {
+      if (!readyRef.current || !saveTimerRef.current) return;
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      void saveStore(stateRef.current);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flush();
+    };
+  }, []);
 
   useEffect(() => {
     pendingRef.current = pending;

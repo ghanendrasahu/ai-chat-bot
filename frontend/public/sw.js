@@ -1,6 +1,6 @@
 /* Mira service worker: fresh shell, cached assets, offline fallback. */
 
-const VERSION = "mira-v2";
+const VERSION = "mira-v3";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -9,9 +9,10 @@ const SHELL = [
   "/offline.html",
   "/manifest.webmanifest",
   "/icon-192.png",
-  "/icon-512.png",
-  "/favicon.png",
-  "/mira-mark.jpg",
+  "/favicon-32.png",
+  "/apple-touch-icon.png",
+  "/mira-mark-96.jpg",
+  "/fonts/inter-latin.woff2",
 ];
 
 self.addEventListener("install", (event) => {

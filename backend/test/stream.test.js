@@ -14,6 +14,8 @@ const DEFAULTS = {
   CHAT_AUX_LIMIT: "1000",
   CHAT_AUX_DAILY_LIMIT: "5000",
   CHAT_STREAM_TIMEOUT_MS: "5000",
+  CHAT_MAX_TOKENS: "",
+  AI_AUX_MODEL: "",
 };
 
 /** Start a cache-busted app instance with a fake OpenAI client. */
@@ -390,9 +392,9 @@ function longHistory() {
   }));
 }
 
-test("an over-budget thread gets one rolling summary, cached and sent back", async () => {
+test("an over-budget thread summarizes in the background and caches it for the next turn", async () => {
   let summaryCalls = 0;
-  let answerMessages = null;
+  const answerMessages = [];
 
   await withMockApp(
     { GROQ_API_KEY: "gsk-test" },
@@ -402,28 +404,186 @@ test("an over-budget thread gets one rolling summary, cached and sent back", asy
         summaryCalls += 1;
         return answer("They discussed the deploy pipeline and chose Node streams.");
       }
-      answerMessages = params.messages;
+      answerMessages.push(params.messages);
       return answer("Here is the answer.");
     },
     async (base) => {
-      const response = await post(base, "/chat", {
+      const first = await post(base, "/chat", {
         message: "what next?",
         history: longHistory(),
       });
-      assert.equal(response.status, 200);
-      const body = await response.json();
+      assert.equal(first.status, 200);
+      const body = await first.json();
       assert.equal(body.reply, "Here is the answer.");
       assert.equal(summaryCalls, 1);
       assert.match(body.summary, /deploy pipeline/);
       assert.ok(body.summaryCount > 0);
 
-      const summaryNote = answerMessages.find(
+      // The turn that triggered the summary is not made to wait for it: the
+      // reply uses the context it already had, and the new summary is cached.
+      assert.ok(
+        !answerMessages[0].some(
+          (message) => message.role === "system" && /Summary of earlier turns/.test(message.content)
+        )
+      );
+
+      const second = await post(base, "/chat", {
+        message: "and now?",
+        history: longHistory(),
+        summary: body.summary,
+        summaryCount: body.summaryCount,
+      });
+      assert.equal(second.status, 200);
+      assert.equal(summaryCalls, 1, "a cached summary should not be rebuilt");
+
+      const summaryNote = answerMessages[1].find(
         (message) => message.role === "system" && /Summary of earlier turns/.test(message.content)
       );
-      assert.ok(summaryNote, "the summary was not added to the provider messages");
+      assert.ok(summaryNote, "the cached summary was not added to the next turn");
       assert.match(summaryNote.content, /deploy pipeline/);
     }
   );
+});
+
+test("chat calls cap the reply length so cost and latency stay bounded", async () => {
+  const seen = [];
+  await withMockApp(
+    { GROQ_API_KEY: "gsk-test" },
+    async (params) => {
+      seen.push(params);
+      return answer("ok");
+    },
+    async (base) => {
+      const plain = await post(base, "/chat", { message: "hi" });
+      assert.equal(plain.status, 200);
+      await plain.json();
+      assert.equal(seen.at(-1).max_tokens, 1024);
+
+      const streamed = await post(base, "/chat/stream", { message: "hi" });
+      assert.equal(streamed.status, 200);
+      await streamed.text();
+      assert.equal(seen.at(-1).max_tokens, 1024);
+    }
+  );
+});
+
+test("title and summary use the provider default, not the visitor's large model", async () => {
+  const models = [];
+  await withMockApp(
+    { GROQ_API_KEY: "gsk-test" },
+    async (params) => {
+      const system = params.messages?.[0]?.content ?? "";
+      models.push({ model: params.model, system });
+      if (system.includes("Summarize this part")) return answer("summary");
+      if (system.includes("Write a short title")) return answer("A title");
+      return answer("ok");
+    },
+    async (base) => {
+      const title = await post(
+        base,
+        "/title",
+        { message: "hello" },
+        { "X-Model": "openai/gpt-oss-120b" }
+      );
+      assert.equal(title.status, 200);
+      await title.json();
+
+      const summary = await post(
+        base,
+        "/summary",
+        { messages: [{ role: "user", content: "hello" }] },
+        { "X-Model": "openai/gpt-oss-120b" }
+      );
+      assert.equal(summary.status, 200);
+      await summary.json();
+
+      assert.equal(models.length, 2);
+      assert.ok(models.every((entry) => entry.model === "openai/gpt-oss-20b"));
+    }
+  );
+});
+
+test("a quiet stream emits heartbeat comments", async () => {
+  await withMockApp(
+    { GROQ_API_KEY: "gsk-test", CHAT_STREAM_HEARTBEAT_MS: "20" },
+    async (params) => {
+      if (!params.stream) return answer("unused");
+      return tokenStreamWithDelay(["Hi", " there"], 80);
+    },
+    async (base) => {
+      const response = await post(base, "/chat/stream", { message: "hi" });
+      assert.equal(response.status, 200);
+      const text = await response.text();
+      assert.match(text, /^: ping$/m);
+      assert.match(text, /event: done/);
+      assert.match(text, /"reply":"Hi there"/);
+    }
+  );
+});
+
+/** A stream that pauses before its second chunk, long enough for a heartbeat. */
+function tokenStreamWithDelay(chunks, delayMs) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { choices: [{ delta: { content: chunks[0] } }] };
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      for (const chunk of chunks.slice(1)) {
+        yield { choices: [{ delta: { content: chunk } }] };
+      }
+    },
+  };
+}
+
+test("requests carry an id and log timing without prompts, replies or keys", async () => {
+  const lines = [];
+  const original = console.log;
+  console.log = (...args) => lines.push(args.join(" "));
+  try {
+    await withMockApp(
+      { GROQ_API_KEY: "gsk-test" },
+      async () => answer("secret-reply"),
+      async (base) => {
+        const response = await post(base, "/chat", { message: "secret-question" });
+        assert.equal(response.status, 200);
+        const id = response.headers.get("x-request-id");
+        assert.match(id ?? "", /^[0-9a-f-]{36}$/);
+        await response.json();
+
+        const echoed = await post(
+          base,
+          "/chat",
+          { message: "hi" },
+          { "X-Request-Id": "client-id-123" }
+        );
+        assert.equal(echoed.headers.get("x-request-id"), "client-id-123");
+        await echoed.json();
+        // Let the server's finish listener run before restoring console.log.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    );
+  } finally {
+    console.log = original;
+  }
+
+  const entries = lines
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry) => entry?.event === "api_request");
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].status, 200);
+  assert.equal(entries[0].provider, "groq");
+  assert.equal(entries[0].model, "openai/gpt-oss-20b");
+  assert.equal(typeof entries[0].ms, "number");
+  assert.equal(entries[0].outcome, "complete");
+  const all = lines.join("\n");
+  assert.ok(!all.includes("secret-question"));
+  assert.ok(!all.includes("secret-reply"));
+  assert.ok(!all.includes("gsk-test"));
 });
 
 test("a summary failure falls back to plain trimming and still answers", async () => {

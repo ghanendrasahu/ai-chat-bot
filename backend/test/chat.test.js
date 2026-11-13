@@ -14,6 +14,8 @@ async function withApp(env, run) {
       CHAT_DAILY_LIMIT: "5000",
       CHAT_GLOBAL_LIMIT: "100000",
       CHAT_GLOBAL_DAILY_LIMIT: "100000",
+      CHAT_MAX_TOKENS: "",
+      AI_AUX_MODEL: "",
     },
     env
   );
@@ -162,6 +164,23 @@ test("rejects a request from a foreign origin", async () => {
     });
     assert.equal(denied.status, 403);
     assert.match((await denied.json()).error, /origin/i);
+  });
+});
+
+test("the origin guard covers title and summary too", async () => {
+  await withApp({ OPENAI_API_KEY: "", GROQ_API_KEY: "" }, async (base) => {
+    for (const path of ["/title", "/summary"]) {
+      const response = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://evil.example",
+        },
+        body: JSON.stringify({ message: "hello", messages: [] }),
+      });
+      assert.equal(response.status, 403, `${path} was not origin-guarded`);
+      assert.match((await response.json()).error, /origin/i);
+    }
   });
 });
 

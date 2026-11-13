@@ -52,7 +52,8 @@ tokens) costs roughly **$0.00019**, so 1,000 messages is around 20 cents - but i
   instructions such as "answer in bullet points", applied to every model. A conversation can
   override the tone and add instructions of its own without touching the global ones.
 - **Streaming replies** - tokens appear as the model writes them. **Stop** keeps the partial text
-  instead of throwing it away, and a dropped connection keeps it too, with a retry.
+  instead of throwing it away, and a dropped connection keeps it too, with a retry. Comment
+  heartbeats keep idle proxies from closing a stream while the model is still thinking.
 - **Edit and resend** any message you sent: it replaces that turn, drops everything after it and
   asks again. **Regenerate** keeps the old answers as variants (`‹ 2/3 ›`), so nothing is lost.
 - **Auto titles** - after the first reply the chat gets a short title from a cheap extra call;
@@ -65,10 +66,12 @@ tokens) costs roughly **$0.00019**, so 1,000 messages is around 20 cents - but i
 - **Search across conversations** in the drawer, plus new/delete/undo
 - Theme control (System / Light / Dark) that follows the OS live
 - **Conversations survive a refresh** - chats live in IndexedDB, with a one-time migration from the
-  old `localStorage` formats. Settings and keys deliberately stay in `localStorage`.
+  old `localStorage` formats. Settings and keys deliberately stay in `localStorage`. A pending save
+  is flushed on `pagehide` and when the tab is hidden, so a closed tab does not lose the last turn.
 - **Context that fits the model** - the server keeps the newest turns inside a token budget,
   folds older ones into a cached rolling summary, and falls back to plain trimming if the summary
-  call fails.
+  call fails. The summary is built alongside the reply instead of before it, so it never delays the
+  first token; the triggering turn receives the new summary in `done` for the next turn to use.
 - Textarea composer: <kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, a
   character counter warns near the 2,000-character limit, and a stop button cancels a slow reply
 - **Memory you control** - edit or delete any remembered fact, and a dismissible "Remember this?"
@@ -110,11 +113,18 @@ The frontend runs on `http://localhost:5173` and calls the backend on `http://lo
 
 `/chat/stream` sends `text/event-stream` with `Cache-Control: no-cache, no-transform`,
 `Connection: keep-alive` and `X-Accel-Buffering: no`. Each `token` event carries a `{ t }` chunk;
-`done` carries the full reply plus the model/provider and the updated summary. Validation, auth,
-origin and rate-limit failures that happen before the first token are ordinary JSON errors, the
-same shape as `/chat`. Mid-stream failures arrive as a safe `error` event. A server timeout
+`done` carries the full reply plus the model/provider and the updated summary. While the model is
+quiet, the server writes `: ping` comment frames (every `CHAT_STREAM_HEARTBEAT_MS`); SSE clients
+ignore them, but they keep proxies and load balancers from treating the stream as dead. Validation,
+auth, origin and rate-limit failures that happen before the first token are ordinary JSON errors,
+the same shape as `/chat`. Mid-stream failures arrive as a safe `error` event. A server timeout
 (`CHAT_STREAM_TIMEOUT_MS`) ends a stream that never finishes, and a client disconnect aborts the
 upstream request.
+
+Every API response carries `X-Request-Id`. One structured line per API call is logged with the
+route, status, duration, provider, model and approximate token counts - never prompts, replies,
+keys or provider payloads. A caller-supplied `X-Request-Id` (8-64 URL-safe characters) is echoed
+back and used in that line.
 
 Optional request headers on `POST /chat`:
 
@@ -146,6 +156,7 @@ Backend variables (copy `backend/.env.example` to `backend/.env`):
 |---------|---------|-------------|
 | `GROQ_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | *(empty)* | Server-side LLM keys. Optional: visitors can bring their own. |
 | `AI_MODEL` | provider default | Override the default provider's model name |
+| `AI_AUX_MODEL` | provider default | Model for `/title` and `/summary`. Utilities use the provider's cheap default even when the visitor picked a large model. |
 | `HOST` | `0.0.0.0` | Interface to bind. Use `127.0.0.1` to keep a local run off the network. |
 | `CHAT_ACCESS_TOKEN` | *(empty)* | Require `X-Access-Token` on `POST /chat` |
 | `CHAT_RATE_LIMIT` | `15` | Requests per IP per minute |
@@ -155,6 +166,8 @@ Backend variables (copy `backend/.env.example` to `backend/.env`):
 | `CHAT_AUX_LIMIT` | `60` | Title/summary calls per IP per minute (a separate bucket) |
 | `CHAT_AUX_DAILY_LIMIT` | `2000` | Title/summary calls per IP per day |
 | `CHAT_STREAM_TIMEOUT_MS` | `45000` | Longest a stream may stay open |
+| `CHAT_STREAM_HEARTBEAT_MS` | `15000` | Interval between `: ping` comment frames on a quiet stream |
+| `CHAT_MAX_TOKENS` | `1024` | Cap on reply length, so cost and worst-case latency stay bounded |
 | `TRUST_PROXY` | `1` | Proxy hops to trust when reading `X-Forwarded-For` |
 | `CORS_ORIGIN` | `http://localhost:5173` | Comma-separated browser origins |
 
@@ -172,11 +185,36 @@ it. Exposed directly, the header is client-controlled and the per-IP limit can b
 `CHAT_GLOBAL_DAILY_LIMIT` are the backstop either way: they are counted on the clock, not on
 anything the client controls, and they cap what a spoofing client can spend.
 
-A request to the API from a browser origin that is neither the app's own origin nor one in
-`CORS_ORIGIN` is refused with `403` before it reaches the model. CORS alone would only stop the
-browser from *reading* the reply - the request would still run and still cost a call. The app's own
-origin is always allowed, because browsers send an `Origin` header on every POST and on module
-script fetches; static files are never blocked by this check.
+A request to any provider-spending route (`/chat`, `/chat/stream`, `/title`, `/summary`) from a
+browser origin that is neither the app's own origin nor one in `CORS_ORIGIN` is refused with `403`
+before it reaches the model. CORS alone would only stop the browser from *reading* the reply - the
+request would still run and still cost a call. The app's own origin is always allowed, because
+browsers send an `Origin` header on every POST and on module script fetches; static files are never
+blocked by this check.
+
+## Performance and delivery
+
+The backend compresses the hashed JS/CSS in `/assets/*` with gzip on first request and keeps the
+compressed copy for the life of the process, so a deployment without a CDN in front still ships
+about a third of the bytes. Inter is self-hosted from `frontend/public/fonts` (SIL OFL 1.1) with a
+`preload`, which removes two third-party connections and a render-blocking external stylesheet.
+The conversations drawer and settings dialog are lazy-loaded, finished messages are memoised, and
+the logo/icon variants are sized for their slots.
+
+Measured on the production build with Lighthouse mobile (simulated slow 4G, 4x CPU):
+
+| Metric | Before | After |
+|---|---|---|
+| Performance score | 87 | **99** |
+| FCP | 1.6 s | **0.8 s** |
+| LCP | 4.0 s | **2.2 s** |
+| TBT | 60 ms | **0 ms** |
+| Total transfer | 445 KiB | **221 KiB** |
+| Initial JS (gzip) | 80.97 kB | **77.75 kB + 5.4 kB lazy** |
+
+Backend time-to-first-token, measured with a fake provider that spends 300 ms on the summary and
+then streams 50 tokens at 20 ms: **318 ms -> 11 ms** (-96.5%). Total reply time moved from
+1,863 ms to 1,606 ms (-13.8%).
 
 Frontend variables are documented in [`frontend/README.md`](frontend/README.md).
 
