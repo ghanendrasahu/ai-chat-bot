@@ -1,7 +1,8 @@
 import "dotenv/config";
 import crypto from "node:crypto";
 import path from "path";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import zlib from "node:zlib";
 import { fileURLToPath } from "url";
 import express from "express";
 import cors from "cors";
@@ -32,12 +33,23 @@ const MAX_TITLE_WORDS = 4;
 const MAX_CHAT_INSTRUCTIONS_CHARS = 1000;
 const TITLE_MAX_TOKENS = 24;
 const SUMMARY_MAX_TOKENS = 180;
+// A ceiling on the reply, so one prompt cannot produce an unbounded (and
+// expensive) completion. Long enough for a detailed answer, short enough that
+// worst-case latency and cost stay predictable.
+const CHAT_MAX_TOKENS = Number(process.env.CHAT_MAX_TOKENS || 1024);
+// Title and summary calls are utilities, not answers: they use the provider's
+// cheap default model instead of whatever large model the visitor selected.
+// AI_AUX_MODEL overrides this for deployments that need a specific model.
+const AI_AUX_MODEL = (process.env.AI_AUX_MODEL || "").trim();
 // Once a summary exists, don't pay for another summary call on every single
 // turn. Roll it forward only when at least this many newer turns have fallen
 // out of the budget since the last summary.
 const SUMMARY_MIN_NEW_MESSAGES = 4;
 // A stream that never ends would hold a socket until the platform kills it.
 const STREAM_TIMEOUT_MS = Number(process.env.CHAT_STREAM_TIMEOUT_MS || 45_000);
+// Comment frames keep proxies and load balancers from treating a quiet stream
+// as dead while the model is still thinking. Clients ignore them.
+const STREAM_HEARTBEAT_MS = Number(process.env.CHAT_STREAM_HEARTBEAT_MS || 15_000);
 // The body has to carry the current message plus the history we are willing
 // to read. The token budget is what actually limits what reaches a provider;
 // this only stops a huge JSON body from being parsed at all.
@@ -119,6 +131,9 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "http://localhost:5173")
 // Render; use 0 when the app is exposed directly, otherwise a client can
 // spoof the header and get a fresh rate-limit bucket per request.
 const TRUST_PROXY = Number.parseInt(process.env.TRUST_PROXY ?? "1", 10);
+// Routes that spend provider quota. Their access logs carry timing and token
+// estimates only - never prompts, replies, keys or provider payloads.
+const LOG_API_PATHS = ["/chat", "/title", "/summary"];
 
 const app = express();
 app.disable("x-powered-by");
@@ -134,6 +149,53 @@ app.use((_req, res, next) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  next();
+});
+
+/**
+ * A request id and one structured access line per API call. The line contains
+ * routing, status, latency and approximate token counts. It deliberately has
+ * no message text, no summary, no key and no provider payload.
+ */
+app.use((req, res, next) => {
+  const pathname = req.path;
+  const logged = LOG_API_PATHS.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+  if (!logged) return next();
+
+  const supplied = (req.get("x-request-id") || "").trim();
+  const id = /^[A-Za-z0-9._-]{8,64}$/.test(supplied) ? supplied : crypto.randomUUID();
+  req.id = id;
+  req.startedAt = performance.now();
+  res.setHeader("X-Request-Id", id);
+
+  let written = false;
+  const write = (outcome) => {
+    if (written) return;
+    written = true;
+    const entry = {
+      event: "api_request",
+      id,
+      method: req.method,
+      route: pathname,
+      status: res.statusCode,
+      outcome,
+      ms: Math.round(performance.now() - req.startedAt),
+      provider: res.locals.provider ?? null,
+      model: res.locals.model ?? null,
+      keySource: res.locals.keySource ?? null,
+      ttftMs: res.locals.ttftMs ?? null,
+      promptTokens: res.locals.promptTokens ?? null,
+      replyTokens: res.locals.replyTokens ?? null,
+    };
+    const line = JSON.stringify(entry);
+    if (outcome === "complete" && res.statusCode < 500) console.log(line);
+    else console.warn(line);
+  };
+
+  res.once("finish", () => write("complete"));
+  res.once("close", () => write(res.writableFinished ? "complete" : "aborted"));
   next();
 });
 
@@ -169,9 +231,9 @@ app.use(
 );
 // CORS only stops a browser from *reading* a cross-origin response - it does
 // not stop the request from reaching the handler. Refuse foreign origins on
-// the API so a page on another site cannot spend the owner's LLM key. Static
-// files cost nothing, so they are left alone.
-app.use(["/chat", "/api"], (req, res, next) => {
+// every route that spends a provider key, so a page on another site cannot
+// drain the owner's quota. Static files cost nothing, so they are left alone.
+app.use(["/chat", "/title", "/summary", "/api"], (req, res, next) => {
   if (!originAllowed(req, req.get("origin"))) {
     return res.status(403).json({ error: "Origin not allowed" });
   }
@@ -311,6 +373,15 @@ function serverModelFor(providerId) {
 }
 
 /**
+ * Title and summary calls do not need the model chosen for the conversation.
+ * Using the provider's default keeps them cheap and fast even when the visitor
+ * picked a large model. AI_AUX_MODEL is the explicit escape hatch.
+ */
+export function auxModelFor(config) {
+  return AI_AUX_MODEL || PROVIDERS[config?.id]?.defaultModel || config?.model || "";
+}
+
+/**
  * Turns the request's provider headers into everything needed for one call.
  * Nothing is cached: a bring-your-own key lives only for the duration of the
  * request and is never written anywhere.
@@ -379,9 +450,12 @@ export function clientFor(config) {
   }
 
   const cached = serverClients.get(config.id);
-  if (cached && cached.signature === config.key) return cached.client;
+  // Compare a digest, not the key itself: a cached entry then never holds a
+  // credential that could leak through a heap dump or a debugger.
+  const signature = crypto.createHash("sha256").update(config.key).digest("hex");
+  if (cached && cached.signature === signature) return cached.client;
   const client = makeClient(options);
-  serverClients.set(config.id, { signature: config.key, client });
+  serverClients.set(config.id, { signature, client });
   return client;
 }
 
@@ -747,6 +821,10 @@ function prepareChat(req, res) {
     return null;
   }
 
+  res.locals.provider = config.id;
+  res.locals.model = config.model;
+  res.locals.keySource = config.keySource;
+
   const persona =
     typeof req.body?.persona === "string" && PERSONAS[req.body.persona]
       ? req.body.persona
@@ -820,6 +898,9 @@ function prepareAux(req, res, { requireMessage = false } = {}) {
     });
     return null;
   }
+  res.locals.provider = config.id;
+  res.locals.model = auxModelFor(config);
+  res.locals.keySource = config.keySource;
   return { config, api, message };
 }
 
@@ -847,47 +928,50 @@ async function summarizeTurns(api, config, { previous = "", turns = [] }) {
 }
 
 /**
- * Fits the conversation into the token budget and rolls a cached summary
- * forward when enough old turns have fallen out. Any failure simply leaves
- * the plain trimmed context in place - a summary is an optimisation, never a
- * reason to fail a message.
+ * Fits the conversation into the token budget and starts rolling the summary
+ * forward when enough old turns have fallen out.
+ *
+ * The summary is started but not awaited: it is context for *later* turns, so
+ * waiting for it before calling the provider only adds time-to-first-token.
+ * `pending` resolves to the summary that should be cached with this turn, and
+ * always resolves (a failed summary keeps the previous one).
  */
-async function withRollingSummary(api, config, request) {
+function prepareContext(api, config, request) {
   const context = selectContext(request.history, {
     pinned: request.pinned,
     summary: request.summary,
   });
 
+  const unchanged = {
+    summary: request.summary,
+    summaryCount: request.summaryCount,
+  };
+
   if (context.overflow.length === 0) {
-    return { ...context, summary: request.summary, summaryCount: request.summaryCount, updated: false };
+    return { ...context, summary: request.summary, pending: Promise.resolve(unchanged) };
   }
 
   const grewEnough =
     context.overflow.length >= request.summaryCount + SUMMARY_MIN_NEW_MESSAGES;
   if (request.summary && !grewEnough) {
-    return { ...context, summary: request.summary, summaryCount: request.summaryCount, updated: false };
+    return { ...context, summary: request.summary, pending: Promise.resolve(unchanged) };
   }
 
-  try {
-    const summary = await summarizeTurns(api, config, {
-      previous: request.summary,
-      turns: context.overflow,
-    });
-    const next = selectContext(request.history, {
-      pinned: request.pinned,
-      summary,
-    });
-    return {
-      ...next,
+  const pending = summarizeTurns(api, { ...config, model: auxModelFor(config) }, {
+    previous: request.summary,
+    turns: context.overflow,
+  })
+    .then((summary) => ({
       summary,
       summaryCount: context.overflow.length,
-      updated: true,
-    };
-  } catch (err) {
-    logProviderFailure("summary", config, err);
-    // Plain trimming: the newest turns still fit, older ones are dropped.
-    return { ...context, summary: request.summary, summaryCount: request.summaryCount, updated: false };
-  }
+    }))
+    .catch((err) => {
+      logProviderFailure("summary", config, err);
+      // Plain trimming: the newest turns still fit, older ones are dropped.
+      return unchanged;
+    });
+
+  return { ...context, summary: request.summary, pending };
 }
 
 function writeEvent(res, event, data) {
@@ -900,23 +984,30 @@ app.post("/chat", async (req, res) => {
   if (!request) return;
 
   try {
-    const context = await withRollingSummary(request.api, request.config, request);
+    const context = prepareContext(request.api, request.config, request);
+    const messages = buildMessages({
+      message: request.message,
+      history: context.kept,
+      pinned: context.pinned,
+      summary: context.summary,
+      persona: request.persona,
+      instructions: request.instructions,
+      chatInstructions: request.chatInstructions,
+      memory: request.memory,
+    });
+    res.locals.promptTokens = estimateTokens(
+      messages.map((message) => message.content).join("\n")
+    );
     const response = await request.api.chat.completions.create({
       model: request.config.model,
-      messages: buildMessages({
-        message: request.message,
-        history: context.kept,
-        pinned: context.pinned,
-        summary: context.summary,
-        persona: request.persona,
-        instructions: request.instructions,
-        chatInstructions: request.chatInstructions,
-        memory: request.memory,
-      }),
+      max_tokens: CHAT_MAX_TOKENS,
+      messages,
     });
 
     const reply = response.choices[0]?.message?.content;
     if (!reply) throw new Error("empty completion");
+    res.locals.replyTokens = estimateTokens(reply);
+    const summaryState = await context.pending;
     // Which model actually answered, so the UI can label the reply when the
     // user switches models mid-thread.
     res.json({
@@ -924,8 +1015,8 @@ app.post("/chat", async (req, res) => {
       model: request.config.model,
       provider: request.config.id,
       keySource: request.config.keySource,
-      summary: context.summary,
-      summaryCount: context.summaryCount,
+      summary: summaryState.summary,
+      summaryCount: summaryState.summaryCount,
     });
   } catch (err) {
     sendProviderFailure(res, request.config, err);
@@ -939,6 +1030,7 @@ app.post("/chat/stream", async (req, res) => {
   let stream = null;
   let finished = false;
   let timer = null;
+  let heartbeat = null;
   const upstream = new AbortController();
 
   // Abort the upstream request when the browser goes away, and mark the loop
@@ -947,6 +1039,7 @@ app.post("/chat/stream", async (req, res) => {
     if (finished) return;
     finished = true;
     if (timer) clearTimeout(timer);
+    if (heartbeat) clearInterval(heartbeat);
     upstream.abort();
     try {
       stream?.controller?.abort?.();
@@ -970,24 +1063,31 @@ app.post("/chat/stream", async (req, res) => {
   });
 
   try {
-    // Summaries happen before the first token, so a failure here can still be
-    // a normal JSON error rather than an SSE error event.
-    const context = await withRollingSummary(request.api, request.config, request);
+    // The summary call runs alongside the reply instead of blocking the first
+    // token. A failure is handled inside prepareContext and leaves the plain
+    // trimmed context in place.
+    const context = prepareContext(request.api, request.config, request);
     if (finished || res.writableEnded) return;
+
+    const messages = buildMessages({
+      message: request.message,
+      history: context.kept,
+      pinned: context.pinned,
+      summary: context.summary,
+      persona: request.persona,
+      instructions: request.instructions,
+      chatInstructions: request.chatInstructions,
+      memory: request.memory,
+    });
+    res.locals.promptTokens = estimateTokens(
+      messages.map((message) => message.content).join("\n")
+    );
 
     stream = await request.api.chat.completions.create(
       {
         model: request.config.model,
-        messages: buildMessages({
-          message: request.message,
-          history: context.kept,
-          pinned: context.pinned,
-          summary: context.summary,
-          persona: request.persona,
-          instructions: request.instructions,
-          chatInstructions: request.chatInstructions,
-          memory: request.memory,
-        }),
+        max_tokens: CHAT_MAX_TOKENS,
+        messages,
         stream: true,
       },
       { signal: upstream.signal }
@@ -1006,10 +1106,20 @@ app.post("/chat/stream", async (req, res) => {
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders?.();
+    // Small token frames should leave immediately rather than wait for
+    // Nagle's algorithm to coalesce them.
+    res.socket?.setNoDelay?.(true);
+
+    heartbeat = setInterval(() => {
+      if (finished || res.writableEnded) return;
+      res.write(": ping\n\n");
+    }, STREAM_HEARTBEAT_MS);
+    heartbeat.unref?.();
 
     timer = setTimeout(() => {
       if (finished || res.writableEnded) return;
       finished = true;
+      if (heartbeat) clearInterval(heartbeat);
       upstream.abort();
       try {
         stream?.controller?.abort?.();
@@ -1029,20 +1139,29 @@ app.post("/chat/stream", async (req, res) => {
       if (finished) break;
       const token = chunk.choices?.[0]?.delta?.content;
       if (!token) continue;
+      if (res.locals.ttftMs === undefined) {
+        res.locals.ttftMs = Math.round(performance.now() - req.startedAt);
+      }
       reply += token;
       writeEvent(res, "token", { t: token });
     }
 
     if (finished || res.writableEnded) return;
     if (!reply.trim()) throw new Error("empty completion");
+    res.locals.replyTokens = estimateTokens(reply);
+
+    // The summary usually finished while tokens were streaming, so this is
+    // normally already resolved and adds no perceptible delay.
+    const summaryState = await context.pending;
+    if (finished || res.writableEnded) return;
 
     writeEvent(res, "done", {
       reply,
       model: request.config.model,
       provider: request.config.id,
       keySource: request.config.keySource,
-      summary: context.summary,
-      summaryCount: context.summaryCount,
+      summary: summaryState.summary,
+      summaryCount: summaryState.summaryCount,
     });
     res.end();
   } catch (err) {
@@ -1062,6 +1181,7 @@ app.post("/chat/stream", async (req, res) => {
   } finally {
     finished = true;
     if (timer) clearTimeout(timer);
+    if (heartbeat) clearInterval(heartbeat);
   }
 });
 
@@ -1071,15 +1191,19 @@ app.post("/title", async (req, res) => {
 
   try {
     const response = await prepared.api.chat.completions.create({
-      model: prepared.config.model,
+      model: auxModelFor(prepared.config),
       max_tokens: TITLE_MAX_TOKENS,
       messages: [
         { role: "system", content: TITLE_PROMPT },
         { role: "user", content: prepared.message.slice(0, 1000) },
       ],
     });
+    res.locals.promptTokens = estimateTokens(
+      `${TITLE_PROMPT}\n${prepared.message.slice(0, 1000)}`
+    );
     const title = sanitizeTitle(response.choices?.[0]?.message?.content);
     if (!title) throw new Error("empty title");
+    res.locals.replyTokens = estimateTokens(title);
     res.set("Cache-Control", "no-store");
     res.json({ title });
   } catch (err) {
@@ -1101,10 +1225,18 @@ app.post("/summary", async (req, res) => {
   }
 
   try {
-    const summary = await summarizeTurns(prepared.api, prepared.config, {
-      previous,
-      turns,
-    });
+    res.locals.promptTokens = estimateTokens(
+      `${previous}\n${turns.map((turn) => turn.content).join("\n")}`
+    );
+    const summary = await summarizeTurns(
+      prepared.api,
+      { ...prepared.config, model: auxModelFor(prepared.config) },
+      {
+        previous,
+        turns,
+      }
+    );
+    res.locals.replyTokens = estimateTokens(summary);
     res.set("Cache-Control", "no-store");
     res.json({ summary });
   } catch (err) {
@@ -1123,12 +1255,61 @@ if (hasBuiltFrontend) {
     res.sendFile(shell);
   });
 
+  // Gzip the hashed JS/CSS on first request and keep the compressed copy for
+  // the process lifetime. Without a proxy in front, this is the difference
+  // between shipping 247 kB and 78 kB to a phone on a slow connection.
+  const gzippedAssets = new Map();
+  /** Honour `gzip;q=0` and similar refusals, not just the presence of the name. */
+  const acceptsGzip = (header) =>
+    (header || "")
+      .toLowerCase()
+      .split(",")
+      .some((part) => {
+        const [coding, ...params] = part.trim().split(";").map((value) => value.trim());
+        if (coding !== "gzip") return false;
+        const q = params.find((param) => param.startsWith("q="));
+        return !q || Number.parseFloat(q.slice(2)) > 0;
+      });
+
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (!req.path.startsWith("/assets/")) return next();
+    if (!acceptsGzip(req.get("accept-encoding"))) return next();
+
+    const name = path.basename(req.path);
+    if (!/^[A-Za-z0-9._-]+\.(?:js|css|svg|json)$/.test(name)) return next();
+
+    let entry = gzippedAssets.get(name);
+    if (!entry) {
+      try {
+        const source = readFileSync(path.join(distDir, "assets", name));
+        entry = {
+          body: zlib.gzipSync(source, { level: 9 }),
+          type: path.extname(name),
+        };
+        gzippedAssets.set(name, entry);
+      } catch {
+        return next();
+      }
+    }
+
+    res.set("Content-Encoding", "gzip");
+    res.set("Vary", "Accept-Encoding");
+    res.set("Cache-Control", "public, max-age=31536000, immutable");
+    res.type(entry.type);
+    res.send(entry.body);
+  });
+
   app.use(
     express.static(distDir, {
       setHeaders(res, filePath) {
         // The file name carries the content hash, so it can be cached hard.
         if (filePath.includes(`${path.sep}assets${path.sep}`)) {
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        } else if (filePath.includes(`${path.sep}fonts${path.sep}`)) {
+          // The font name is stable; a year is long enough without claiming
+          // immutability, so replacing the file still propagates.
+          res.setHeader("Cache-Control", "public, max-age=31536000");
         }
       },
     })
