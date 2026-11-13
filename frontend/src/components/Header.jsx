@@ -33,7 +33,7 @@ export default function Header({
         </button>
         <img
           className="header__mark"
-          src="/mira-mark.jpg"
+          src="/mira-mark-96.jpg"
           alt=""
           width="38"
           height="38"

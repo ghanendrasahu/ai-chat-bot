@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import CopyButton from "./CopyButton.jsx";
 import Markdown from "./Markdown.jsx";
 import {
@@ -36,7 +36,7 @@ function MenuItem({ icon, children, onClick, disabled, danger }) {
   );
 }
 
-export default function Message({
+function Message({
   message,
   onRetry,
   onRegenerate,
@@ -394,3 +394,7 @@ export default function Message({
     </article>
   );
 }
+
+// Finished messages keep their object identity while a reply streams, so memo
+// stops the whole thread from re-rendering once per animation frame.
+export default memo(Message);

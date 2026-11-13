@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import Composer from "./components/Composer.jsx";
-import Drawer from "./components/Drawer.jsx";
 import Header from "./components/Header.jsx";
-import SettingsDialog from "./components/SettingsDialog.jsx";
 import SuggestionChip from "./components/SuggestionChip.jsx";
 import Thread from "./components/Thread.jsx";
 import Toast from "./components/Toast.jsx";
@@ -13,6 +11,12 @@ import { useSettings } from "./hooks/useSettings.js";
 import { suggestMemory } from "./lib/memory.js";
 import { shortModelName } from "./lib/providers.js";
 import { MAX_MEMORY_ITEMS, providerLabel } from "./lib/settings.js";
+
+// Neither overlay is needed for the first paint. Loading them on demand keeps
+// their code out of the initial bundle; both return null while closed, so
+// mounting them only when open changes nothing else.
+const Drawer = lazy(() => import("./components/Drawer.jsx"));
+const SettingsDialog = lazy(() => import("./components/SettingsDialog.jsx"));
 
 const UNDO_WINDOW_MS = 8000;
 const TOAST_MS = 3500;
@@ -266,48 +270,56 @@ export default function App() {
           onAction={toast?.onAction}
         />
 
-        <Drawer
-          open={drawerOpen}
-          chats={chats}
-          activeId={activeId}
-          activeChat={activeChat}
-          canClear={messages.length > 0}
-          onNewChat={handleNewChat}
-          onClose={closeDrawer}
-          onSwitch={handleSwitchChat}
-          onDelete={deleteChat}
-          onClear={handleClear}
-          onRename={renameChat}
-          onSetChatPersona={setChatPersona}
-          onSetChatInstructions={setChatInstructions}
-        />
+        {drawerOpen ? (
+          <Suspense fallback={null}>
+            <Drawer
+              open
+              chats={chats}
+              activeId={activeId}
+              activeChat={activeChat}
+              canClear={messages.length > 0}
+              onNewChat={handleNewChat}
+              onClose={closeDrawer}
+              onSwitch={handleSwitchChat}
+              onDelete={deleteChat}
+              onClear={handleClear}
+              onRename={renameChat}
+              onSetChatPersona={setChatPersona}
+              onSetChatInstructions={setChatInstructions}
+            />
+          </Suspense>
+        ) : null}
 
-        <SettingsDialog
-          open={settingsOpen}
-          initialTab={settingsTab}
-          settings={settings}
-          serverProviders={health.providers}
-          onClose={closeSettings}
-          onSetProvider={handleProvider}
-          onSetModel={handleModel}
-          onSetKey={setKey}
-          onAddMemory={(text) => {
-            const added = addMemory(text);
-            if (added) setToast({ message: "Memory updated" });
-            return added;
-          }}
-          onRemoveMemory={removeMemory}
-          onEditMemory={editMemory}
-          onClearMemory={clearMemory}
-          onClearKeys={() => {
-            clearKeys();
-            setToast({ message: "All API keys removed from this browser" });
-          }}
-          onResetAll={resetEverything}
-          onInstructions={(instructions) => update({ instructions })}
-          onPersona={(persona) => update({ persona })}
-          onTheme={(theme) => update({ theme })}
-        />
+        {settingsOpen ? (
+          <Suspense fallback={null}>
+            <SettingsDialog
+              open
+              initialTab={settingsTab}
+              settings={settings}
+              serverProviders={health.providers}
+              onClose={closeSettings}
+              onSetProvider={handleProvider}
+              onSetModel={handleModel}
+              onSetKey={setKey}
+              onAddMemory={(text) => {
+                const added = addMemory(text);
+                if (added) setToast({ message: "Memory updated" });
+                return added;
+              }}
+              onRemoveMemory={removeMemory}
+              onEditMemory={editMemory}
+              onClearMemory={clearMemory}
+              onClearKeys={() => {
+                clearKeys();
+                setToast({ message: "All API keys removed from this browser" });
+              }}
+              onResetAll={resetEverything}
+              onInstructions={(instructions) => update({ instructions })}
+              onPersona={(persona) => update({ persona })}
+              onTheme={(theme) => update({ theme })}
+            />
+          </Suspense>
+        ) : null}
       </div>
     </div>
   );
